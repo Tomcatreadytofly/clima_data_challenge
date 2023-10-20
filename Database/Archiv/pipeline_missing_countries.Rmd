@@ -1,0 +1,448 @@
+---
+title: "Missing Countries Pipeline"
+root.dir: "C:/Users/Antonia/Documents/Studium/4_FS_2023/cdk1/zips/"
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(root.dir = "C:/Users/Antonia/Documents/Studium/4_FS_2023/cdk1/zips/")
+
+```
+
+```{r}
+library(tidyverse)
+library(dplyr)
+library(readr)
+library(purrr)
+library(glue)
+
+library(celestial)
+library(RPostgres)
+library(DBI)
+```
+
+```{r set-up Verbindung}
+db <- "schneefall_database"
+db_host <- "v000727.edu.ds.fhnw.ch"
+db_port <- "50011"
+db_user <- 'schneefall'
+db_pass <- "Klima2023"
+
+conn <- dbConnect(
+  Postgres(),
+  dbname = db,
+  host = db_host,
+  port = db_port,
+  user = db_user,
+  password = db_pass
+)
+
+
+```
+
+
+```{r define variables for zip-files and stations}
+setwd( "C:/Users/Antonia/Documents/Studium/4_FS_2023/cdk1/zips/")
+
+rain_zip <- "ECA_blend_rr.zip"
+temp_zip <- "ECA_blend_tg.zip"
+
+stations_tg <- read_csv(unzip(temp_zip, "stations.txt"), skip = 17, na = c("NA", "-999", "9999", "-9999"))
+stations_rr <- read_csv(unzip(rain_zip, "stations.txt"), skip = 17, na = c("NA", "-999", "9999", "-9999"))
+
+```
+
+
+```{r read and create stationlists}
+missing_countries <- c("GR", "FI", "FR", "BA", "ME", "RO", "PT", "AL", "MK", "BG", "TR", "ES", "IT" )
+continental <- c("GB", "IE", "PL", "AT", "HU", "SK", "DE", "SI", "DK", "MD", "UA", "BY", "LV", "LT", "EE", "NL", "CH", "LU", "IS", "FR")
+subtropic <- c("SP", "IT", "ME", "SR", "HR")
+subpolar <- c("SE", "NO", "FI", "RU", "SJ")
+
+
+clean_stations <- function(df){
+  clean_df <- df %>% 
+  filter(CN %in% missing_countries) %>% 
+   mutate(country = recode(CN, 
+                           "AL" = "albania",
+                           "BA" = "bosnia",
+                           "BG" = "bulgaria",
+                           "FI" = "finland",
+                           "FR" = "france",
+                           "GR" = "greece",
+                           "ME" = "montenegro",
+                           "MK" = "macedonia",
+                           "PT" = "portugal",
+                           "RO" = "romania",
+                           "TR" = "turkey",
+                           "ES" = "spain",
+                           "IT" = "italy")) %>% 
+
+  rename_all(tolower)%>%
+  mutate(s = as.numeric(substr(lon, 2,4))) %>% 
+  filter(s < 90) %>% 
+  mutate(lon = dms2deg(lon),
+       lat = dms2deg(lat),
+       region = case_when(
+         cn %in% continental ~ "continental",
+         cn %in% subpolar ~ "subpolar",
+         cn %in% subtropic ~ "subtropic"),
+       staname = str_to_title(staname),
+       stahght = paste0(stringr::str_to_title(staname), ", ", hght, "m"),
+       cn = tolower(cn)) %>% 
+  select(- s) 
+  return(clean_df)
+  
+}
+
+st_tg <- clean_stations(stations_tg)
+st_rr <- clean_stations(stations_rr)
+
+```
+
+
+```{r Merge stationlists to only keep stations with both observations}
+merged_stations <- merge(st_tg, st_rr)
+merged_stations  %>% group_by(country) %>% count()
+```
+
+```{r function for cleaning each station file }
+
+clean_data <- function(df) {
+    clean_data <- df %>% 
+      rename_at(5, ~'Q') %>% 
+      filter(Q != 9) %>% 
+      mutate(DATE = as_date(DATE), 
+        year = year(DATE), 
+             month = month(DATE))%>% 
+      mutate_at(4, ~./10) %>% 
+      rename_all(tolower) %>% 
+      select(-c(q, souid)) %>% 
+      mutate(winter_season = ifelse(month  %in% c(9,10,11,12), year, year-1),
+             season = ifelse(month %in% c(10,11,12,1,2,3,4), "winter", "summer"))
+    
+    clean_data <- inner_join(clean_data, merged_stations, by = "staid")
+    return(clean_data)
+    
+}
+
+```
+
+
+```{r pipeline function}
+
+pipeline_mc <- function(station, tabellenname, threshhold) {
+   for (i in station) {
+     
+    error_occurred <- FALSE
+
+    print(paste("start file:", i))
+    rain_file <- paste0("RR_STAID", station, ".txt")
+    temp_file <- paste0("TG_STAID", station, ".txt")
+    df_temp <- read_csv(unzip(temp_zip, temp_file), col_types = 'iicii', skip = 20, na = c("NA", "-9999"))
+    df_rain <- read_csv(unzip(rain_zip, rain_file), col_types = 'iicii', skip = 20, na = c("NA", "-9999"))
+    file.remove(rain_file)
+    file.remove(temp_file)
+    
+    temp_clean <- clean_data(df_temp)
+    rain_clean <- clean_data(df_rain)
+    #print("cleaning done")
+    
+    tryCatch({
+    countries <- merge(temp_clean, rain_clean)
+    countries <- countries |> arrange(country, station, date)
+    countries$sd <- 0
+    prev_snow_depth <- 0
+    for (i in 1:nrow(countries)) {
+      if (countries$tg[i] < 0) {
+    # Add precipitation to snow depth
+      countries$sd[i] <- countries$sd[i] + countries$rr[i]
+  }
+  
+  # Calculate 10% of snow_depth of the previous day
+  tenth <- 0.1 * prev_snow_depth
+  
+  # Calculate the amount of snow to transfer from the previous day according to current temperature and snow quantity of the previous day  
+  if (countries$tg[i] < 5) {
+    if (tenth < 1) {
+      countries$sd[i] <- countries$sd[i] + (max(0, prev_snow_depth - 1))
+    } else if (tenth > 5) {
+      countries$sd[i] <- countries$sd[i] + (prev_snow_depth - 5)
+    } else {
+      countries$sd[i] <- countries$sd[i] + (0.9 * prev_snow_depth)
+    }
+  } else if (countries$tg[i] >= 5 && countries$tg[i] < 10) {
+    if (tenth < 2) {
+      countries$sd[i] <- countries$sd[i] + (max(0, prev_snow_depth - 2))
+    } else if (tenth > 8) {
+      countries$sd[i] <- countries$sd[i] + (prev_snow_depth - 8)
+    } else {
+      countries$sd[i] <- countries$sd[i] + (0.8 * prev_snow_depth)
+    }
+  } else {
+    if (tenth < 3) {
+      countries$sd[i] <- countries$sd[i] + (max(0, prev_snow_depth - 3))
+    } else if (tenth > 10) {
+      countries$sd[i] <- countries$sd[i] + (prev_snow_depth - 10)
+    } else {
+      countries$sd[i] <- countries$sd[i] + (0.5 * prev_snow_depth)
+    }
+  }
+  
+  # If the temperature is 2 or more, precipitation is rain and melts away snow at a ratio of precipitation / 2
+  if (countries$tg[i] >= 2) {
+    countries$sd[i] <- countries$sd[i] - (countries$rr[i] / 2)
+  }
+  
+  # Round snow depth to 1 decimal place and ensure it's neither negative nor higher than 700
+  countries$sd[i] <- max(min(round(countries$sd[i], 1), 1700), 0)
+  
+  # Set previous snow depth to current snow depth for next iteration
+  prev_snow_depth <- countries$sd[i]
+}
+    countries <- countries %>% select(- c(tg, rr)) %>% mutate(sd = as.integer(sd))
+    #print("calculations done")
+    
+    #check if enough data in file
+    if ((max(countries$year)-min(countries$year) < threshhold)&
+        nrow(countries)<400){
+      print(paste("skipped file: ", i))
+      next
+    }
+    country_table <- unique(countries$country)
+    station_table <- glue("sta_{unique(countries$staid)}" )
+    
+
+    
+
+
+    dbWriteTable(conn, tabellenname, countries, temporary = FALSE, append = TRUE) 
+    #dbWriteTable(conn, country_table, countries, temporary = FALSE, append = TRUE)
+    #dbWriteTable(conn, station_table, countries, temporary = FALSE, append = TRUE)
+    dbWriteTable(conn, station_table, countries, temporary = FALSE, overwrite = TRUE)
+    print(paste(i, station_table, "ok!"))
+    
+    }, error = function(e) {
+        error_occurred <- TRUE
+      })
+    if (error_occurred) {
+      print(paste("error on file:", i))
+      next
+    }
+    
+}
+}
+
+```
+
+
+```{r list of stations to loop}
+#create list of staids to loop through
+station_ids_mc <- formatC(merged_stations$staid, width = 6, format = "d", flag = "0")
+
+
+```
+
+
+```{r call pipeline on stations}
+setwd("C:/Users/Antonia/Documents/Studium/4_FS_2023/cdk1/zips/")
+
+for (i in station_ids_mc){
+  pipeline_mc(i, "cdk", 10)
+}
+
+
+#dbGetQuery(conn, "select country, count(staid) from cdk group by(country)")
+
+```
+
+
+```{r Germany part}
+
+file <-  "C:/Users/Antonia/Documents/Studium/4_FS_2023/cdk1/zips/snowdepth.zip"
+stations <- read_csv(unzip(file, "stations.txt"),col_types = 'icccci',  skip = 17, na = c("NA", "-999", "9999", "-9999")) 
+
+
+europe <-  c("GB", "IE", "PL", "AT", "HU", "SK", "DE", "SI", "DK", "MD", "UA", "BY", "LV", "LT", "EE", "NL", "CH", "LU", "IS", "FR", "SP", "IT", "ME", "SR", "HR", "SE", "NO", "FI", "RU", "SJ")
+
+continental <- c("GB", "IE", "PL", "AT", "HU", "SK", "DE", "SI", "DK", "MD", "UA", "BY", "LV", "LT", "EE", "NL", "CH", "LU", "IS", "FR")
+subtropic <- c("SP", "IT", "ME", "SR", "HR")
+subpolar <- c("SE", "NO", "FI", "RU", "SJ")
+
+st <- stations %>% 
+  filter(CN %in% europe) %>% 
+   mutate(country = recode(CN, 
+                           "AM" = "armenia",
+                           "AT" = "austria",
+                           "AZ" = "azerbaijan",
+                           "BY" = "belarus",
+                           "CH" = "switzerland",
+                           "DE" = "germany",
+                           "DK" = "denmark",
+                           "EE" = "estonia",
+                           "ES" = "spain",
+                           "FI" = "finland",
+                           "FR" = "france",
+                           "GB" = "united kingdom",
+                           "GE" = "georgia",
+                           "GL" = "greenland",
+                           "HR" = "croatia",
+                           "HU" = "hungary",
+                           "IE" = "ireland",
+                           "IS" = "iceland",
+                           "IT" = "italy",
+                           "KZ" = "kazakhstan",
+                           "KG" = "kyrgyzstan",
+                           "LV" = "latvia",
+                           "LT" = "lithuania",
+                           "LU" = "luxembourg",
+                           "MD" = "moldova",
+                           "ME" = "montenegro",
+                           "NL" = "netherlands",
+                           "NO" = "norway",
+                           "PL" = "poland",
+                           "RS" = "serbia",
+                           "RU" = "russia",
+                           "SE" = "sweden",
+                           "SI" = "slovenia",
+                           "SK" = "slovakia",
+                           "SJ" = "svalbard and jan mayen",
+                           "TM" = "turkmenistan",
+                           "TJ" = "tajikistan",
+                           "UA" = "ukraine",
+                           "UZ" = "uzbekistan")) %>% 
+  rename_all(tolower)%>%
+  mutate(s = as.numeric(substr(lon, 2,4))) %>% 
+  filter(s < 90) %>% 
+  mutate(lon = dms2deg(lon),
+       lat = dms2deg(lat),
+       region = case_when(
+         cn %in% continental ~ "continental",
+         cn %in% subpolar ~ "subpolar",
+         cn %in% subtropic ~ "subtropic"),
+       staname = str_to_title(staname),
+       stahght = paste0(stringr::str_to_title(staname), ", ", hght, "m"),
+       cn = tolower(cn)) %>% 
+  select(-s) 
+
+
+```
+
+```{r Pipeline-Funktion}
+#Pipeline bereinigt Daten & prüft, ob der resultierende dataframe noch genügend Datensätze hat. Wenn ja wird in die DB gespeichert. 
+
+pipeline <- function(slice, skip, tablename,threshhold) {
+   for (i in slice) {
+    filename <- paste0("SD_STAID", i, ".txt")
+    df <- read_csv(unzip(file, filename), col_types = 'iicii', skip = skip, na = c("NA", "-9999"))
+    file.remove(filename)
+    new_data <- df %>% 
+      rename_at(5, ~'Q') %>% 
+      filter(Q != 9) %>% 
+      mutate(DATE = as_date(DATE), 
+        year = year(DATE), 
+             month = (month(DATE)))%>% 
+      rename_all(tolower) %>% 
+      select(-c(q, souid)) %>% 
+      mutate(winter_season = ifelse(month  %in% c(9,10,11,12), year, year-1),
+             season = ifelse(month %in% c(10,11,12,1,2,3,4), "winter", "summer"))
+    
+    new_data <- inner_join(new_data, st, by = "staid")
+    
+    if ((max(new_data$year)-min(new_data$year) < threshhold)&
+        nrow(new_data)<400){
+      print(paste("skipped file: ", i))
+      next
+    }
+    
+    station_table  <- glue("sta_{unique(new_data$staid)}" )
+    
+    #dbWriteTable(conn, tablename, new_data, temporary = FALSE, append = TRUE)
+    dbWriteTable(conn, station_table, new_data, temporary = FALSE, overwrite = TRUE)
+    print(paste(i, "ok!"))
+
+}
+}
+
+```
+
+```{r Liste von Dateien erstellen}
+#Namen von Stationen auflisten ohne Deutschland
+german_stations <- filter(st, cn == "de")
+
+#station_ids umformatieren, so dass sie dem Namensformat der zipdatei entsprechen
+ger_station_ids <- formatC(german_stations$staid, width = 6, format = "d", flag = "0")
+
+#Liste in einen Vektor packen damit die Dateien einzeln verarbeitet werden
+#fileslist <- c(station_ids)
+```
+
+
+
+```{r Pipeline-Funktion deutschland aufrufen}
+for (i in ger_station_ids){
+pipeline(i, 22, "cdk", 10)
+  }
+
+dbListTables(conn)
+
+
+
+
+
+tablenames <- data.frame(dbListTables(conn))
+
+german_stations <- german_stations %>% 
+  mutate(sta = paste0("sta_", staid)) 
+
+lst <- german_stations$sta
+
+
+slice(tablenames, 8402:8482)
+
+lst <- german_stations$sta
+
+for (i in lst){
+  error_occurred <- FALSE
+  tryCatch({
+  dbRemoveTable(conn, i)
+  },
+ error = function(e) {
+        error_occurred <- TRUE
+      })
+  if (error_occurred) {
+      next
+    }
+    }
+
+dbRemoveTable()
+```
+
+```{r random_stuff, eval = FALSE}
+
+dbRemoveTable(conn, "sta_14130")
+
+for (i in distinct_stations$staid){
+  ifelse (dbGetQuery(conn, glue("select distinct(staid) from cdk where staid = {i}")), TRUE, FALSE)
+}
+added_stations <- dbGetQuery(conn, glue("select distinct(staid) from cdk where staid in ({distinct_stations})"))
+spain <- dbGetQuery(conn, "select distinct(staid) from italy order by staid")
+dbGetQuery(conn, "select distinct(staid) from montenegro order by staid")
+
+spa_it2 <- anti_join(spa_it, spain)
+spa_it2 <- spa_it2
+
+countries <- unique(merged_stations$country)
+for (i in countries){
+  db <- dbGetQuery(conn, glue("select distinct(staid) from {i}"))
+}
+
+
+tables_in_db <- dbListTables(conn)
+
+newlist <- filter(countries, country %in% tables_in_db)
+
+
+dbExecute(conn, "delete from cdk where cn = 'de'")
+
+```
+

@@ -1,0 +1,52 @@
+```{r}
+library(tidyverse)
+library(lubridate)
+```
+
+```{r}
+load("poland.Rdata")
+```
+
+
+# Schneesicherheit - Bar Plot mit Anzahl Schneetagen mit mehr als 10 cm Schnee
+
+```{r}
+
+# Nur Tage mit mehr als 10cm Schnee beibehalten und deren Anzahl pro Jahr berechnen
+ski_days <- poland %>%
+  filter(stahght == "Poronin, 847m") %>%
+  filter(sd >= 10) %>%
+  group_by(year(date)) %>%
+  summarise(count = n()) %>%
+  rename("year" = "year(date)")
+
+
+# Anzahl Tage pro Jahr mit mehr als 10cm Schnee für die Referenzperiode berechnen
+ski_days_reference <- poland %>%
+  filter(stahght == "Poronin, 847m") %>%
+  filter(year(date) >= 1950 & year(date) <= 1980) %>%
+  filter(sd >= 10) %>%
+  group_by(year(date)) %>%
+  summarise(count = n()) %>%
+  rename("year" = "year(date)") %>%
+  summarise(mean_count = mean(count)) %>%
+  pull(mean_count)
+
+
+
+ggplot(ski_days, aes(x = year, y = count)) +
+  geom_bar(stat = "identity", aes(fill = ifelse(count < ski_days_reference, "red", "blue")), show.legend = FALSE) +
+  labs(x = "", y = "Anzahl Tage", title = "Anzahl Tage im Jahr mit mehr als 10 cm Schnee", subtitle = paste("Rote Linie: Mittelwert zwischen 1950 und 1980: ", ski_days_reference, "Tage")) +
+  theme_minimal() +
+  geom_hline(yintercept = ski_days_reference, color = "red", linetype = "dashed", size = 1.5) +
+  scale_fill_manual(values = c("#2671B5", "#E9333F")) +
+  theme(axis.title = element_text(size = 14),
+        axis.text = element_text(size = 14),
+        plot.title = element_text(size = 16),
+        plot.subtitle = element_text(size = 12, color = "red"),  # Set subtitle color to red
+        plot.caption = element_text(size = 14, face = "italic", margin = margin(-10, 5, 5, 0))) +
+  expand_limits(y = 0) +
+  labs(caption = "Poronin (847m), Polen")
+
+
+```

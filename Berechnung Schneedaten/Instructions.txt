@@ -1,0 +1,11 @@
+1) Go to https://www.ecad.eu/dailydata/predefinedseries.php and download:
+- "Daily snow depth SD" - ECA_blend_sd.zip
+- "Daily mean temperature TG" - ECA_blend_tg.zip
+- "Daily precipitation amount RR" - ECA_blend_rr.zip
+
+2) Unzip the files if necessary and copy:
+- 01_snow_depth.Rmd into ECA_blend_sd
+- 02_temperature.Rmd into ECA_blend_tg
+- 03_precipitation.Rmd into ECA_blend_rr
+
+3) Run all 4 Rmd Notebooks => The resulting cdk1 dataframe contains blended daily snow depth values in cm for all countries in Europe

@@ -1,0 +1,13 @@
+name: Test_Dashboard_Klima_v2
+title: Test_Dashboard_Klima_v2
+username:
+account: cdk1challenge
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 8943601
+bundleId: 7149987
+url: https://cdk1challenge.shinyapps.io/Test_Dashboard_Klima_v2/
+when: 1682700029.5732
+lastSyncTime: 1682700029.57321
+asMultiple: FALSE
+asStatic: FALSE

@@ -1,0 +1,119 @@
+# Creation of the snow_depth dataframe containing the daily snow depth in cm for countries in Europe
+# Link to data:  https://www.ecad.eu/dailydata/predefinedseries.php  -  "Daily snow depth SD" - ECA_blend_sd.zip
+
+```{r}
+library(tidyverse)
+library(dplyr)
+library(readr)
+library(purrr)
+```
+
+# Create the dataframe 
+```{r}
+# Create a list of all text files starting with "SD_"
+files <- list.files(pattern = "^SD_.*\\.txt$")
+
+# Read the files and skip the first 23 lines 
+snow_depth <- lapply(files, function(file) {
+  data <- read.table(file, header = FALSE, sep = ",", skip = 23, fill = TRUE)
+  return(data)
+})
+
+# Combine the files into a dataframe
+snow_depth <- do.call(rbind, snow_depth)
+```
+
+# Delete and rename columns
+```{r}
+# Delete the unnecessary SOUID: Source identifier and Q_SD quality check columns
+snow_depth <- snow_depth |> select(-V2, -V5)
+
+# Rename the columns
+snow_depth <- snow_depth |> rename(id = V1, date = V3, snow_depth = V4)
+```
+
+# Create a dataframe from the stations.txt file containing additional information for each station
+```{r}
+snow_depth_stations <- read.delim(file = "stations.txt", header = FALSE, skip = 19, sep = ",")
+
+# Rename the columns
+snow_depth_stations <- snow_depth_stations |> rename(id = V1, station = V2, country = V3, latitude = V4, longitude = V5, height = V6)
+```
+
+# Merge the snow_depth_stations and snow_depth dataframes
+```{r}
+snow_depth <- merge(snow_depth_stations, snow_depth, by = "id", all = FALSE)
+
+# Place the date column after the id column and the station column after the country column
+snow_depth <- snow_depth |> 
+  relocate(date, .after = id) |> 
+  relocate(station, .after = country)
+```
+
+# Clean and convert data
+```{r}
+# Remove leading and trailing whitespace from the country and station columns
+snow_depth <- snow_depth |>
+  mutate(country = trimws(country),
+         station = trimws(station))
+
+# Rename the ISO 3166 country codes to full country names
+snow_depth <- snow_depth |>
+  mutate(country = recode(country, 
+                           "AM" = "armenia",
+                           "AT" = "austria",
+                           "AZ" = "azerbaijan",
+                           "BY" = "belarus",
+                           "CH" = "switzerland",
+                           "DE" = "germany",
+                           "DK" = "denmark",
+                           "EE" = "estonia",
+                           "ES" = "spain",
+                           "FI" = "finland",
+                           "FR" = "france",
+                           "GB" = "united kingdom",
+                           "GE" = "georgia",
+                           "GL" = "greenland",
+                           "HR" = "croatia",
+                           "HU" = "hungary",
+                           "IE" = "ireland",
+                           "IS" = "iceland",
+                           "IT" = "italy",
+                           "KZ" = "kazakhstan",
+                           "KG" = "kyrgyzstan",
+                           "LV" = "latvia",
+                           "LT" = "lithuania",
+                           "LU" = "luxembourg",
+                           "MD" = "moldova",
+                           "ME" = "montenegro",
+                           "NL" = "netherlands",
+                           "NO" = "norway",
+                           "PL" = "poland",
+                           "RS" = "serbia",
+                           "RU" = "russia",
+                           "SE" = "sweden",
+                           "SI" = "slovenia",
+                           "SK" = "slovakia",
+                           "SJ" = "svalbard and jan mayen",
+                           "TM" = "turkmenistan",
+                           "TJ" = "tajikistan",
+                           "UA" = "ukraine",
+                           "UZ" = "uzbekistan"))
+
+
+# Convert all station names to lower case
+snow_depth$station <- tolower(snow_depth$station)
+
+# Convert the numeric format of the "date" column to the date format 
+snow_depth$date <- as.Date(as.character(snow_depth$date), format = "%Y%m%d", origin = "1970-01-01")
+
+# Convert values of -9999 to NAs
+snow_depth[snow_depth == -9999] <- NA
+
+# Convert the int data type of the snow_depth column to num so it matches the one in the dataframe with the missing stations
+snow_depth$snow_depth <- as.numeric(snow_depth$snow_depth)
+
+# Drop all NAs in the dataframe
+# snow_depth <- na.omit(snow_depth)
+```
+

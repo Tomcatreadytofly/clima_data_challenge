@@ -1,0 +1,324 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+```{r}
+
+library(tidyverse)
+library(lubridate)
+```
+
+```{r}
+load("poland.Rdata")
+# load("switzerland.Rdata")
+# load("slovakia.Rdata")
+
+# save(poland, file = "poland.Rdata")
+
+# str(poland)
+# unique(poland$staname)
+# unique(poland$stahght)
+
+```
+
+# Create a column with Station name and height combined
+
+```{r}
+# poland <- poland %>%
+#   mutate(stahght = paste0(stringr::str_to_title(staname), ", ", hght, "m"))
+
+# Show a list of stations arranged by their height
+
+# stations_by_height <- poland %>% 
+#   select(staname, hght) %>% 
+#   distinct() %>% 
+#   arrange(hght)
+
+```
+
+# Plot of extreme events - The largest and smallest amounts of snow for the winter months during a specified time period
+
+```{r}
+
+winter_months <- poland %>%
+  filter(stahght == "Hala Gasienicowa, 1379m") %>%
+  filter(year(date) >= 1950 & year(date) <= 2023) %>%
+  mutate(month = lubridate::month(date),
+         month_label = case_when(
+           month == 11 ~ "Nov",
+           month == 12 ~ "Dec",
+           month == 1 ~ "Jan",
+           month == 2 ~ "Feb",
+           month == 3 ~ "Mar",
+           month == 4 ~ "Apr"
+         )) %>%
+  filter(month %in% c(11, 12, 1, 2, 3, 4)) %>%
+  group_by(year = lubridate::year(date), month_label) %>%
+  summarise(mean_sd = mean(sd)) %>%
+  mutate(month_label = factor(month_label, levels = c("Nov", "Dec", "Jan", "Feb", "Mar", "Apr"), ordered = TRUE))
+
+
+
+combined_obs <- bind_rows(
+  winter_months %>%
+    group_by(month_label) %>%
+    filter(mean_sd == min(mean_sd)) %>%
+    arrange(desc(year)) %>%
+    slice(1) %>%
+    transform(obs_type = "Smallest"),
+  winter_months %>%
+    group_by(month_label) %>%
+    slice_max(mean_sd) %>%
+    transform(obs_type = "Largest")
+)
+
+
+
+ggplot(combined_obs, aes(x = month_label, y = mean_sd, fill = obs_type)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = year), position = position_dodge(width = 0.9), vjust = -0.5, size = 4, color = "black") +
+  labs(x = NULL, y = "Mean Snow Depth in cm", title = "Winter Months with Largest and Smallest Amounts of Snow",
+       subtitle = "Years:      1950 - 2023\nLocation:  Hala Gasienicowa, 1379m") +
+  facet_wrap(~ obs_type, ncol = 2, strip.position = "top") +
+  scale_fill_manual(values = c("#2671B5", "#E9333F")) +
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.10))) +  # Adjust the expand argument to add space in the y-axis
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 16, face = "bold"),
+    axis.text = element_text(size = 12),
+    axis.title = element_text(size = 14),
+    legend.position = "none",
+    panel.grid.major = element_line(color = "lightgray"),
+    panel.grid.minor = element_blank(),
+    panel.border = element_blank(),
+    plot.margin = margin(10, 20, 20, 10),
+    strip.text = element_blank(),
+    strip.background = element_blank()
+  )
+
+
+
+```
+
+
+# Line Plot: Snow Depth over the years with dashed line for reference value
+
+```{r}
+
+# Calculate the baseline of the average snow depth for years between 1920 and 1950 and winter months November until April
+
+reference <- poland %>%
+  filter(stahght == "Warszawa-Okecie, 107m") %>%
+  filter(year(date) >= 1950 & year(date) <= 1980 & month(date) %in% c(11, 12, 1, 2, 3, 4)) %>%
+  summarise(mean_sd = mean(sd)) %>%
+  pull(mean_sd)
+
+
+# Show a line plot
+
+
+
+poland %>%
+  filter(stahght == "Warszawa-Okecie, 107m") %>%
+  filter(year(date) >= 1800 & month(date) %in% c(11, 12, 1, 2, 3, 4)) %>%
+  group_by(year = (year(date))) %>%
+  summarise(mean_sd = mean(sd)) %>%
+  ggplot(aes(x = year, y = mean_sd)) +
+  geom_smooth(se = FALSE, color = "#2671B5", linetype = "solid", size = 1.2) +
+  geom_hline(yintercept = reference, color = "red", linetype = "dashed", size = 1.2) +
+  labs(y = "Snow Depth in cm", x = "") +
+  ggtitle("Mean Yearly Snow Depth from November to April") +
+  labs(subtitle = "Dashed Line: Mean Snow Depth between 1950 and 1980") +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 16, face = "bold"),
+    axis.text = element_text(size = 12),
+    axis.title.y = element_text(size = 14),
+    legend.position = "none",
+    panel.grid.major = element_line(color = "lightgray"),
+    panel.grid.minor = element_blank(),
+    panel.border = element_blank(),
+    plot.margin = margin(10, 20, 00, 10),
+    plot.subtitle = element_text(color = "red"),
+    plot.caption = element_text(size = 14, face = "italic", margin = margin(0, 0, 15, 0))  # Adjust the font size, style, and margin of the caption
+  ) +
+  expand_limits(y = 0) +
+  labs(caption = "Warszawa-Okecie (107m), Poland")
+
+
+
+
+```
+
+
+# Comparison between 3 different stations 
+
+```{r}
+
+
+poland %>%
+  filter(stahght %in% c("Plock, 87m", "Zabkowice, 319m", "Sloszow, 636m")) %>%
+  ggplot(aes(x = year(date), y = sd, color = stahght)) +
+  geom_smooth(se = FALSE, size = 1.2) +
+  labs(
+    title = "Snow Depth of Selected Locations in Poland",
+    x = "",
+    y = "Mean Snow Depth in cm"
+  ) +
+  scale_color_manual(
+    values = c("Plock, 87m" = "#E41A1C", "Zabkowice, 319m" = "#377EB8", "Sloszow, 636m" = "#66C2A5"),
+    name = NULL
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 16, face = "bold", hjust = 0.5),  # Set hjust to center the title
+    axis.title = element_text(size = 14),
+    axis.text = element_text(size = 12),
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size = 11),
+    legend.box = "horizontal",
+    legend.position = "top",
+    legend.margin = margin(b = 10),
+    panel.grid.major = element_line(color = "lightgray"),
+    panel.grid.minor = element_blank(),
+    panel.border = element_blank()
+  )
+
+
+
+```
+
+
+
+# Bar Plot for monthly comparison of two periods in in Sniezka, Poland
+
+```{r}
+monthly_avg_combined <- rbind(
+  poland %>%
+    filter(stahght == "Sniezka, 958m") %>%
+    filter(year(date) >= 1950 & year(date) <= 1980) %>%
+    group_by(month = factor(format(date, "%m"), levels = sprintf("%02d", 1:12), labels = month.abb)) %>%
+    summarise(sd = mean(sd)) %>%
+    mutate(dataset = "Monthly Average 1"),
+  
+  poland %>%
+    filter(stahght == "Sniezka, 958m") %>%
+    filter(year(date) >= 2018 & year(date) <= 2023) %>%
+    group_by(month = factor(format(date, "%m"), levels = sprintf("%02d", 1:12), labels = month.abb)) %>%
+    summarise(sd = mean(sd)) %>%
+    mutate(dataset = "Monthly Average 2")
+)
+
+
+
+ggplot(monthly_avg_combined, aes(x = month, y = sd, fill = dataset)) +
+  geom_bar(stat = "identity", position = "dodge", width = 0.7, color = "black", size = 0.5) +
+  labs(title = "Comparison of Monthly Snow Depth between 2 Periods",
+       subtitle = "Sniezka (958m), Poland",  # Add the subtitle
+       x = "",  # Remove the "Month" label
+       y = "Mean Snow Depth in cm") +
+  scale_fill_manual(values = c("Monthly Average 1" = "#2671B5", "Monthly Average 2" = "#E9333F"), 
+                    labels = c("1950 - 1980", "2018 - 2023")) +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 16, face = "bold"),
+        plot.subtitle = element_text(size = 14, face = "italic", margin = margin(b = 10)),
+        axis.text = element_text(size = 12),
+        axis.title = element_text(size = 14),
+        legend.title = element_blank(),
+        legend.text = element_text(size = 12),
+        legend.position = "top",
+        panel.grid.major = element_line(color = "gray"),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank())
+
+
+
+```
+
+# Plot snow depth by height range (this is of limited usability as there are more stations in later years, especially at higher altitudes, which skew the results)
+
+```{r}
+
+
+poland %>%
+  filter(year(date) >= 1920) %>%
+  group_by(year(date)) %>%
+  mutate(height_range = case_when(
+    hght < 450 ~ "Below 450m",
+    hght >= 451 & hght <= 600 ~ "451m - 600m",
+    hght > 600 ~ "Above 600m"
+  )) %>%
+  ggplot(aes(x = year(date), y = sd, color = height_range)) +
+  geom_smooth(se = FALSE, size = 1.2) +
+  labs(
+    title = "Snow Depth of Various Height Ranges in Poland",
+    x = "",  # Remove the "Year" label
+    y = "Mean Snow Depth in cm",
+    color = "Height Range"
+  ) +
+  scale_color_manual(values = c("Below 450m" = "#E41A1C", "451m - 600m" = "#377EB8", "Above 600m" = "#66C2A5")) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 16, face = "bold"),
+    axis.title = element_text(size = 14),
+    axis.text = element_text(size = 12),
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size = 11),
+    legend.position = "right",
+    panel.grid.major = element_line(color = "lightgray"),
+    panel.grid.minor = element_blank(),
+    panel.border = element_blank()
+  )
+
+```
+
+
+# Plot showing mean station height measurements over the years
+
+```{r}
+library(ggplot2)
+library(dplyr)
+
+switzerland %>%
+  group_by(year = lubridate::year(date)) %>%
+  summarise(mean_hght = mean(hght)) %>%
+  ggplot(aes(x = year, y = mean_hght)) +
+  geom_line(color = "#2671B5", size = 1.2) +
+  labs(y = "Meters above Sea Level", x = "Year") +
+  ggtitle("Mean Height of measurements in Switzerland by Year") +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 16, face = "bold"),
+    axis.text = element_text(size = 12),
+    axis.title.y = element_text(size = 14),
+    legend.position = "none",
+    panel.grid.major = element_line(color = "lightgray"),
+    panel.grid.minor = element_blank(),
+    panel.border = element_blank(),
+    plot.margin = margin(10, 20, 20, 10)
+  )
+
+poland %>%
+  group_by(year = lubridate::year(date)) %>%
+  summarise(mean_hght = mean(hght)) %>%
+  ggplot(aes(x = year, y = mean_hght)) +
+  geom_line(color = "#2671B5", size = 1.2) +
+  labs(y = "Meters above Sea Level", x = "Year") +
+  ggtitle("Mean Height of measurements in Poland by Year") +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 16, face = "bold"),
+    axis.text = element_text(size = 12),
+    axis.title.y = element_text(size = 14),
+    legend.position = "none",
+    panel.grid.major = element_line(color = "lightgray"),
+    panel.grid.minor = element_blank(),
+    panel.border = element_blank(),
+    plot.margin = margin(10, 20, 20, 10)
+  )
+
+```
+
+
+
+

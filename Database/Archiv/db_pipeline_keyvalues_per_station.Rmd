@@ -1,0 +1,396 @@
+---
+title: "R Notebook"
+output: 
+---
+```{r libraries}
+library(RPostgres)
+library(DBI)
+library(tidyverse)
+library(lubridate)
+library(glue)
+library(celestial)
+library(leaflet)
+```
+#Datenbank Teil
+##Set-up für Verbindung zur DB
+```{r set-up Verbindung}
+db <- "schneefall_database"
+db_host <- "v000727.edu.ds.fhnw.ch"
+db_port <- "50011"
+db_user <- "schneefall"
+db_pass <- "Klima2023"
+
+conn <- dbConnect(
+  Postgres(),
+  dbname = db,
+  host = db_host,
+  port = db_port,
+  user = db_user,
+  password = db_pass
+)
+```
+
+
+##Pipeline Messwerte
+
+
+```{r Pipeline-Funktion, warning = FALSE, message= FALSE}
+pipeline <- function(station, skip, tabellenname) {
+  
+  for (i in station) {
+    
+    error_occurred <- FALSE
+    
+    tryCatch({
+      i_new <- paste0("SD_STAID", station, ".txt")
+      df <- read_csv(unzip(file, i_new), col_types = "iicii", skip = skip, na = c("NA", "-9999"))
+      file.remove(i_new)
+      new_data <- df %>%
+        rename_at(5, ~"Q") %>%
+        filter(Q != 9) %>%
+        filter(SD >= 0) %>%
+        mutate(
+          DATE = as_date(DATE),
+          year = year(DATE),
+          month = month(DATE)
+        ) %>%
+        rename_all(tolower) %>%
+        select(-c(q, souid)) %>%
+        mutate(winter_season = ifelse(month %in% c(9, 10, 11, 12), year, year - 1))
+      
+      if (min(new_data$year) > 1980 |
+          nrow(new_data) < 200 |
+          max(new_data$year) <= 1990 |
+          max(new_data$year) - min(new_data$year) <= 10 |
+          min(new_data$staid) == 192) {
+        print(paste("skipped station: ", i))
+        error_occurred <- TRUE
+      }
+      
+      df_snow <- new_data %>%
+        filter((winter_season >= 1950 & winter_season <= 1980) | winter_season >= max(winter_season)-10) %>%
+        group_by(staid, winter_season) %>%
+        summarize(snow = mean(sd, na.rm = TRUE), 
+                  days = mean(sum(ifelse(sd >= 20, 1, 0))),na.rm = TRUE) %>%
+        ungroup() %>% 
+        group_by(staid, period = ifelse(winter_season <= 1980 & winter_season >= 1950, "rp", "ly")) %>%
+        summarize(snow = mean(snow, na.rm = TRUE), 
+                  days = mean(days, na.rm = TRUE)) %>%
+        ungroup() %>% 
+        pivot_wider(names_from = period, values_from = c(snow, days)) %>%
+        mutate(
+          snow_diff = round(snow_rp - snow_ly, 2),
+          snow_diff_pct = -1 * (round(snow_diff / snow_rp, 2)),
+          days_diff = round(days_rp - days_ly, 2),
+          days_diff_pct = -1 * round(days_diff / days_rp, 2)
+        ) %>% ungroup() %>% 
+        drop_na()
+      
+      
+      df_days <- new_data %>%
+        mutate(md = format(date, "%m-%d")) %>%
+        inner_join(df_days, by = "md") %>%
+        filter(sd > 0, 
+               (winter_season >= 1950 & winter_season <= 1980) | winter_season >= max(winter_season)-10) %>%
+        group_by(staid, winter_season, period = ifelse(winter_season <= 1980 & winter_season >= 1950, "rp", "ly")) %>%
+        summarize(first = min(day_nr), 
+                  last = max(day_nr)) %>%
+        group_by(staid, period) %>%
+        summarize(avg_first = mean(first, na.rm = TRUE),
+                  avg_last = mean(last,na.rm = TRUE), 
+                  avg_dur = mean(last - first, na.rm = TRUE)) %>%
+        ungroup() %>%
+        pivot_wider(names_from = period,
+                    values_from = c(avg_first, avg_last, avg_dur)) %>%
+        mutate(
+          first_day_diff = round(avg_first_ly - avg_first_rp, 2),
+          last_day_diff = round(avg_last_ly - avg_last_rp, 2),
+          dur_diff = round(avg_dur_ly - avg_dur_rp, 2),
+          dur_diff_pct = -1 * round(dur_diff / avg_dur_rp, 2)
+        ) %>%  ungroup() %>% 
+        drop_na()
+      
+      combined <- merge(df_days, df_snow)
+      new_data <- inner_join(combined, st, by = "staid")
+      
+      dbWriteTable(conn, tabellenname, new_data, temporary = FALSE, append = TRUE) # Schreibt die Daten in die Datenbank
+      
+      print(paste(i, "ok!"))
+      
+      }, error = function(e) {
+        error_occurred <- TRUE
+      })
+    
+    if (error_occurred) {
+      print(paste("error on file:", i))
+      next
+    }
+  }
+}
+```
+
+
+```{r Pipeline-Funktion aufrufen, warning = FALSE, message=FALSE}
+
+newlist <- slice(stations_to_loop, 121:4322)
+station_ids <- formatC(stations_to_loop$staid, width = 6, format = "d", flag = "0")
+
+
+
+
+for (i in station_ids) {
+  pipeline(i, 22, "stations")
+}
+
+dbGetQuery(conn, "select count(staid) from stations")
+
+dbRemoveTable(conn, "stations")
+
+
+```
+
+
+
+```{r deutschland, eval = FALSE}
+set.seed(50)
+germany_max <- germany_raw %>%
+  arrange(desc(hght)) %>%
+  slice_max(hght, n = 10)
+
+germany_raw <- st %>% filter(cn == "de")
+germany <- germany_raw %>%
+  group_by(
+    lat_cut = cut(lat, breaks = 20),
+    long_cut = cut(lon, breaks = 20),
+    hght_cut = cut(hght, breaks = 20)
+  ) %>%
+  sample_frac(0.3) %>%
+  ungroup() %>%
+  select(-c(lat_cut, long_cut, hght_cut)) %>%
+  rbind(germany_max)
+
+germany
+summary(germany_raw)
+summary(germany)
+```
+
+
+```{r deutschland überprüfung stratifying, eval = FALSE}
+ggplot(germany_raw, aes(hght)) +
+  geom_histogram()
+
+
+ggplot(germany, aes(hght)) +
+  geom_histogram()
+
+summary(germany_raw)
+summary(germany)
+```
+
+
+```{r stations key values per year, eval = FALSE}
+query <- "select staid, stahght, country, winter_season,
+          avg(sd) as snow,
+          sum(case when sd > 0 then 1 else 0 end)  as snow_days,
+          sum(case when sd > 10 then 1 else 0 end)  as snow_days10,
+          sum(case when sd > 40 then 1 else 0 end)  as snow_days40,
+          max(lat) as lat,
+          max(lon) as lon
+          from cdk
+          where season = 'winter' and (winter_season between 1950 and 1980 or winter_season > 2000)
+          group by (country, staid,stahght, winter_season)"
+
+querydays <- "select staid, 
+              stahght, 
+              country,
+              winter_season,
+              min(day_nr) as first_day,
+              max(day_nr) as last_day
+              from cdk
+              where sd > 0
+              group by (country, staid,stahght, winter_season)
+              "
+
+stations_summaries <- dbGetQuery(conn, query)
+stations_days <- dbGetQuery(conn, querydays)
+stations_kv <- merge(stations_summaries, stations_days)
+
+
+#dbWriteTable(conn, "stations", stations_kv)
+
+
+```
+```{r Werte Ref-Periode}
+
+query_ref <- "select distinct(staid), round(avg(sd),2) as mean, max(sd) as max, min(sd) as min
+              from cdk where winter_season between 1950 and 1980
+              and season = 'winter' group by (staid)"
+
+query_ref_days <- "select distinct(stahght), min(staid), max(lat) as lat, max(lon) as lon,
+              round(avg(day_nr),1) as day, 
+              max(day_nr) as last_day, 
+              min(day_nr) as first_day
+              from cdk where winter_season between 1950 and 1980
+              and season = 'winter'  and sd > 0 
+              group by (stahght)
+"
+
+stations_ref <- dbGetQuery(conn, query_ref) 
+stations_days <- dbGetQuery(conn, query_ref_days)
+stations_ref %>%  filter(round < 0.01) %>% count()
+
+
+europa_mean <- dbGetQuery(conn, "select avg(sd) from cdk where winter_season between 1950 and 1980 and season = 'winter' ")
+
+```
+
+```{r}
+complete_stations %>%  filter(last_day<10) %>% 
+  arrange(staid)
+
+
+
+df_days <- data.frame(md = format(seq(as.Date("2021-10-01"), as.Date("2022-04-30"), by = "day"), "%m-%d"), 
+                      day_nr = 1:length(format(seq(as.Date("2021-10-01"), as.Date("2022-04-30"), by = "day"), "%m-%d")))
+
+
+
+format(date, format="%d.%B")
+
+
+date <- as.Date("01-06", format = "%d-%m")+europe$first_day
+
+```
+
+```{r}
+
+station_years <- stations_kv %>% 
+  group_by(staid) %>% 
+  summarize(first_year = min(winter_season), 
+            last_year = max(winter_season))
+
+
+library(scales)
+
+stations_statistics  <- stations_kv %>% 
+  filter((winter_season >=  1950 & winter_season <=  1980) | winter_season >=  2010  ) %>% 
+  group_by(staid, period = ifelse(winter_season >=  1950 & winter_season <=  1980, "p1", "p2")) %>% 
+        summarize(snow = round(mean(snow, na.rm = TRUE),2), 
+                  days = round(mean(snow_days, na.rm = TRUE),2),
+                  days10 = round(mean(snow_days10, na.rm = TRUE),2),
+                  first = round(mean(first_day, na.rm = TRUE),2),
+                  last = round(mean(last_day, na.rm = TRUE),2),
+                  dur = last - first) %>%
+        ungroup() %>% 
+        pivot_wider(names_from = period, values_from = c(snow, days, days10, first, last,dur)) %>% 
+        drop_na() %>% 
+        mutate(
+         snow_diff_pct = percent(round(-1*(1-snow_p2 / snow_p1),2)),
+         days_diff_pct = percent(round(-1*(1-days10_p2 / days10_p1),2)),
+         first_diff = first_p2 - first_p1,
+         dur_diff = dur_p2 - dur_p1) %>% 
+        ungroup() %>% 
+        drop_na()
+            
+
+sta_kv <- inner_join(stations, stations_statistics, by = "staid")
+
+
+
+europe_kv <- stations_kv %>% 
+  filter((winter_season >=  1950 & winter_season <=  1980) | winter_season >=  2010  ) %>% 
+  group_by(period = ifelse(winter_season >=  1950 & winter_season <=  1980, "p1", "p2")) %>% 
+        summarize(snow = round(mean(snow, na.rm = TRUE),2), 
+                  days = round(mean(snow_days, na.rm = TRUE),2),
+                  days10 = round(mean(snow_days10, na.rm = TRUE),2),
+                  first = round(mean(first_day, na.rm = TRUE),2),
+                  last = round(mean(last_day, na.rm = TRUE),2),
+                  dur = last - first) %>%
+        ungroup() %>% 
+        pivot_wider(names_from = period, values_from = c(snow, days, days10, first, last,dur)) %>% 
+        drop_na() %>% 
+        mutate(
+         snow_diff_pct = percent(round(-1*(1-snow_p2 / snow_p1),2)),
+         days_diff_pct = percent(round(-1*(1-days10_p2 / days10_p1),2)),
+         first_diff = first_p2 - first_p1,
+         dur_diff = dur_p2 - dur_p1,
+         first_p1_date = as.Date("01-10", format = "%d-%m")+first_p1,
+         first_diff_date = as.Date("01-10", format = "%d-%m")+first_p1+first_diff) %>% 
+        mutate(first_p1_date = format(first_p1_date, format="%d.%b"),
+               first_diff_date = format(first_diff_date, format="%d.%b")) %>% 
+        ungroup() %>% 
+        drop_na()
+
+#dbWriteTable(conn, "europe_kv", europe_kv)
+
+stations_with_years <- inner_join(stations, station_years, by = "staid")
+
+tablelist <- data.frame(tbl = dbListTables(conn))
+
+tablelist %>% filter(!str_detect(tbl, "sta_"))
+
+
+stations <- dbGetQuery(conn, "select * from stations")
+station_years <- stations_kv %>% 
+  group_by(staid) %>% 
+  summarize(first_year = min(winter_season), 
+            last_year = max(winter_season))
+stations_with_years <- inner_join(stations, station_years, by = "staid")
+
+dbWriteTable(conn, "stations", stations_with_years, temporary = FALSE, overwrite = TRUE)
+
+dbWriteTable(conn, "stations_kv", sta_kv)
+
+stations_with_years
+
+
+```
+
+
+```{r prob 7 Tage}
+
+test_dfs <- c("sta_1, sta_2, sta_3")
+
+
+stalist <- c("sta_1, sta_2, sta_3")
+    stations_corrected <- paste0("sta_", stalist)
+    query <- paste("SELECT * FROM ", paste(stations_corrected, collapse = " UNION ALL SELECT * FROM "), sep="")
+
+
+for (i in c(test_dfs)){    
+  df <- dbGetQuery(conn, glue("select * from {i}"))
+  df <- df %>% 
+    filter(season == "winter") %>% 
+  select(staid, date,sd, winter_season, season) %>% 
+  arrange(date) %>%
+  group_by(staid) %>%
+  mutate(rolling_snowdepth = rollapply(sd > 0, width = 7, FUN = sum, align = "left", fill = NA)) %>% 
+  group_by(staid, winter_season) %>%
+  summarise(total_days = n(),
+            consecutive_days = sum(rolling_snowdepth == 7 & lead(rolling_snowdepth > 0, n = 7, default = FALSE)),
+            prob = consecutive_days / (total_days - 1)) %>%
+  mutate(rolling_prob = rollmean(prob, 7, na.pad = TRUE))
+  
+  return(df)
+}
+    
+    
+```
+
+```{r}
+stations_summaries %>% 
+  group_by(stahght) %>% 
+  leaflet() %>% 
+    addTiles() %>% 
+    addMarkers(clusterOptions = markerClusterOptions())
+
+
+stations_summaries %>% 
+  group_by(staid) %>% 
+  summarize(lat = max(lat), lng = max(lon), snow = round(mean(snow),2)) %>% 
+  leaflet() %>% 
+    addTiles() %>% 
+    addMarkers(clusterOptions = markerClusterOptions())
+
+```
+

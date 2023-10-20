@@ -1,0 +1,5 @@
+1) Unzip the ECA_indexSD folder 
+2) Remove the stations.txt file from the folder
+3) Copy the 2 data_wrangling files into the folder and run the Python code
+4) Copy the stations.txt file back into the folder
+5) Run the R code

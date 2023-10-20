@@ -1,0 +1,184 @@
+---
+title: "R Notebook"
+
+---
+
+```{r}
+library(leaflet)
+library(shiny)
+library(tidyverse)
+library(shinydashboard)
+library(DataExplorer)
+library(geoR)
+library(celestial)
+library(rgdal)
+library(RPostgres)
+library(DBI)
+```
+```{r}
+getwd()
+load("df_snow.RData")
+```
+```{r}
+df_snow <- read.csv("/Data Wrangling/ECA_indexSD_reduced.csv", header = TRUE)
+```
+
+Die Koordinaten sind nicht im richtigen Format. Sie liegen aktuell im Bogenmass vor und für das leaflet werden die Koordinaten in Dezimalmass benötigt. R bietet mit dms2deg eine Methode, die Koordinaten zu konvertieren.
+
+```{r}
+df_snow <- df_snow %>% 
+  filter(country != "russian federation")
+```
+```{r}
+print(dms2deg("-000:21:23"))
+```
+```{r}
+df_snow <- df_snow %>%
+  mutate(longitude_deg = dms2deg(longitude)) %>%
+  mutate(latitude_deg = dms2deg(latitude))
+```
+
+
+```{r}
+df_snow <- drop_na(df_snow)
+
+glimpse(df_snow)
+```
+```{r}
+```
+
+```{r}
+df_snow_2019 <- df_snow %>%
+  filter(year >= 2019) %>%
+        filter(country == "switzerland") %>%
+        select(station, year, longitude_deg, latitude_deg, winter_months) %>%
+        distinct()
+# 
+df_snow_2019 <- df_snow_2019 %>%
+  mutate(winter_months = as.integer(winter_months))
+# 
+set.seed(236)
+df_snow_2019_sample <- df_snow_2019 %>%
+  slice_sample(n = 5)
+```
+```{r}
+# multiply_row <- function (x) {
+  n <- df_snow_2019_sample$winter_months
+#
+#   df_multiply_row <- df_snow_2019_sample(row = 1:n)
+#
+#   heatmap_test <- rbind(df_multiply_row, df_snow_2019_sample)
+#     return(heatmap_test)
+# }
+
+# multiply_row(df_snow_2019_sample[1])
+
+# n <- df_snow_2019_sample$winter_months[1]
+# multiply rows in df_snow_2019_sample by n
+
+# row_index <- df_snow_2019_sample %>%
+#         rownames_to_column("row")
+#
+# df_multiply_row <- df_snow_2019_sampl e(row = 1:n)
+
+
+```
+```{r}
+# df_snow_2019_sample_duplicated <- df_snow_2019_sample %>%
+#         mutate(count_n = ifelse(winter_months > 0, 1, 0)) %>% 
+#         mutate(max_snow = winter_months) %>% 
+#         group_by(year, station) %>%
+#         complete(count_n = count_n:max_snow) %>%
+#         fill(station, year, longitude_deg, latitude_deg,winter_months)
+```
+
+```{r}
+
+duplicate_rows <- function(df, snow_col) {
+
+  duplicate_rows <- df %>%
+    mutate(snow = as.integer(snow_col)) %>%
+    mutate(count_n = ifelse(snow > 0, 1, 0)) %>%
+        mutate(max_snow = snow) %>%
+        group_by(year, station) %>%
+        complete(count_n = count_n:max_snow) %>%
+        fill(station, year, longitude_deg, latitude_deg,snow) %>%
+        select(station, year, longitude_deg, latitude_deg, snow)
+}
+```
+
+
+```{r}
+# save(df_snow_2019_sample, file = "df_snow_2019_sample.RData")
+# save(df_snow_2019_sample_duplicated, file = "df_snow_2019_sample_duplicated.RData")
+```
+
+
+
+```{r}
+rep_test <- data.frame(df_snow[1,], row = 1:3)
+```
+
+```{r}
+
+for (i in 1:n) {
+  heatmap_test <- rbind(df_snow_2019_sample, df_snow_2019_sample)
+    return(heatmap_test)
+}
+```
+```{r}
+duplicate_rows_default_df <- function(df = df_snow_2019_sample, argument1) {
+  
+  library(tidyverse)
+  
+  duplicate_rows_default_df() <- df
+    mutate(snow = as.integer(argument1))
+}
+```
+
+```{r}
+duplicate_rows_default_df(argument1 = winter_months)
+```
+
+```{r}
+# db <- "schneefall_database"
+# db_host <- "v000727.edu.ds.fhnw.ch"
+# db_port <- "50011"
+# db_user <- 'schneefall'
+# db_pass <- "Klima2023"
+
+```
+```{r}
+# conn <- dbConnect(
+#   RPostgres::Postgres(),
+#   dbname = db, 
+#   host = db_host,
+#   port = db_port,
+#   user = db_user,
+#   password = db_pass
+# )
+```
+
+```{r}
+# dbListTables(conn)
+# dbGetQuery(conn, 'select * from testdaten')
+```
+```{r}
+# beispiel <- data.frame(c("Wert1", "Wert2"), c(235,242))
+# 
+# dbWriteTable(conn, "neue_tabelle", beispiel, temporary = FALSE, append = TRUE)
+```
+
+
+```{r}
+# dbListTables(conn)
+```
+
+
+
+
+
+
+
+
+

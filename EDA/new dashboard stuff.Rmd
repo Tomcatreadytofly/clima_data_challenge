@@ -1,0 +1,174 @@
+```{r librariesn warning = FALSE, message=FALSE}
+library(RPostgres)
+library(DBI)
+library(tidyverse)
+library(lubridate)
+library(shiny)
+library(glue)
+library(leaflet)
+library(celestial)
+library(tmaptools)
+library(DataExplorer)
+library(plotly)
+```
+#Datenbank Teil
+##Set-up für Verbindung zur DB
+```{r set-up Verbindung}
+db <- "schneefall_database"
+db_host <- "v000727.edu.ds.fhnw.ch"
+db_port <- "50011"
+db_user <- "schneefall"
+db_pass <- "Klima2023"
+
+conn <- dbConnect(
+  Postgres(),
+  dbname = db,
+  host = db_host,
+  port = db_port,
+  user = db_user,
+  password = db_pass
+)
+
+localconn <- dbConnect(
+  Postgres(),
+  dbname = "snow",
+  host = "localhost",
+  port = "5432",
+  user = "postgres",
+  password = "SQL"
+)
+```
+
+```{r}
+dataframe <- dbGetQuery(conn, "select winter_season, avg(sd) 
+                        from cdk 
+                        where winter_season between 1950 and 1980 or winter_season > 
+                          (select max(winter_season) from cdk) -10
+                        group by(winter_season)")
+
+df2 <- dbGetQuery(conn, "select winter_season as year, avg(sd) as mean_snow, sum(case when sd > 10 then 1 else 0 end) as snowdays, count(stahght) as n_stations 
+                         from cdk 
+                         group by(winter_season)
+                  having avg(sd) > 0.006")
+
+#dbGetQuery(conn, "select max(winter_season) from cdk")
+
+
+df2 %>% 
+  mutate(snow_days = snowdays / n_stations)
+
+
+df2 %>% 
+  filter(year >=1950) %>% 
+  ggplot(aes(year, mean_snow))+
+  geom_line()+
+  geom_smooth()
+
+
+
+stats_stations <- dbGetQuery(conn, "select country, winter_season, avg(sd), count(staid), avg(hght) from cdk group by (country, winter_season)")
+
+
+stations_range <-  dbGetQuery(conn, "select stahght, max(winter_season)-10 as last_years, 
+                              max(winter_season)-30 as end_ref, 
+                              max(winter_season)-60 as start_ref from cdk group by (stahght)")
+
+
+```
+
+
+```{r}
+library(scales)
+stations <- dbGetQuery(conn, "select * from stations")
+
+summary(stations)
+
+europe <- stations %>%
+  filter(dur_diff_pct > -1 & dur_diff_pct< 1,
+         snow_diff_pct > -1 & snow_diff_pct< 1,
+         days_diff_pct > -1 & days_diff_pct< 1,
+         avg_dur_ly|days_ly|days_rp != 0,
+         avg_dur_rp != 0,
+         first_day_diff > -35) %>% 
+  mutate(days_diff = -1*days_diff) %>% 
+  summarize(dur_diff_pct = percent(mean(dur_diff_pct)),
+            snow_diff_pct = percent(mean(snow_diff_pct)),
+            days_diff_pct = percent(mean(days_diff_pct)),
+            first_day_diff = round(mean(first_day_diff),2),
+            days_diff = round(mean(days_diff),2)
+            )
+
+save(europe, file= "europe_key_values.RData")
+getwd()
+```
+
+
+##Plots
+```{r Scatterplot new}
+df_days <- data.frame(md = format(seq(as.Date("2021-09-01"), as.Date("2022-04-30"), by = "day"), "%m-%d"), day_nr = 1:length(format(seq(as.Date("2021-09-01"), as.Date("2022-04-30"), by = "day"), "%m-%d")))
+
+
+cssd1 <- cssd %>%
+  mutate(season = ifelse(month %in% c(9,10, 11, 12, 1, 2, 3,4), "winter", "summer"),) %>% 
+  filter(winter_season > min(year), season == "winter") %>%
+  mutate(md = format(date, "%m-%d")) %>%
+  inner_join(df_days, by = "md")
+
+cssd_refperiod <- cssd1 %>% 
+  filter(winter_season < 1980 & winter_season > 1950) %>%  
+  group_by(staid, day_nr) %>% 
+  summarize(snow = mean(sd)) %>% 
+  mutate(rolling_avg = zoo::rollmean(snow, 7, na.pad = TRUE))
+
+avg_dev <- cssd1 %>%  group_by(staid, day_nr) %>% summarize(snow = mean(sd))
+chosen_year <- 1999
+
+(ggplot(cssd1) +
+  geom_point(aes(x = day_nr, y = sd), alpha = 0.5, shape = 8, color = "darkgrey") +
+  geom_line(data = cssd_refperiod, aes(x = day_nr, y = rolling_avg), color = "red", linewidth = 1, se = TRUE) +
+  geom_line(data = subset(cssd1, winter_season == chosen_year), aes(x = day_nr, y = sd), color = "#1338BE", linewidth=2) +
+  labs(x = "Monat", 
+       y = "Schneehöhe in cm", 
+       color = "other years",
+       labels = "whyyyyy",
+       title = "Schneehöhen im Winterhalbjahr",
+       caption = "rot: Durchschnittlicher Verlauf der Referenzperiode") +
+  scale_x_continuous(breaks = c(15,45,75,105,135,165,195,225),
+                     labels = c("15" = "Sept", "45" = "Okt", "75" = "Nov", "105" = "Dez", "135" = "Jan", "165" = "Feb", "195" = "Mar", "225" = "Apr"))+
+  theme_minimal()+
+  facet_wrap(~stahght))
+
+
+
+#interactive
+ggplotly(ggplot(cssd1) +
+  geom_point(aes(x = day_nr, y = sd, text = paste("Datum: ", date, "\nSchneehöhe:", sd, "cm")), alpha = 0.5, shape = 8, color = "darkgrey") +
+  geom_line(data = cssd_refperiod, aes(x = day_nr, y = rolling_avg, text = "durchschn. Verlauf Referenzperiode"), color = "red", linewidth = 1) +
+  geom_line(data = subset(cssd1, winter_season == chosen_year), aes(x = day_nr, y = sd, text = "Verlauf gewähltes Jahr"), color = "#1338BE", linewidth=1, labels = "test") +
+  labs(x = "Monat", 
+       y = "Schneehöhe in cm", 
+       color = "other years",
+       title = "Schneehöhen im Winterhalbjahr",
+       caption = "rot: Durchschnittlicher Verlauf der Referenzperiode") +
+  scale_x_continuous(breaks = c(15,45,75,105,135,165,195,225),
+                     labels = c("15" = "Sept", "45" = "Okt", "75" = "Nov", "105" = "Dez", "135" = "Jan", "165" = "Feb", "195" = "Mar", "225" = "Apr"))+
+  theme_minimal()+
+  facet_wrap(~stahght),
+  tooltip = c("text"))
+
+
+dbListFields(conn, "sta_244")
+
+dbExecute(conn, "alter table cdk drop column region")
+
+table_list <-  dbListTables(conn)
+
+for (i in table_list){
+  dbRemoveTable(conn, i)
+}
+
+
+dbListTables(conn)
+
+```
+

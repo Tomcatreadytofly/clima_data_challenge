@@ -1,0 +1,1145 @@
+---
+title: "R Notebook"
+output: 
+---
+
+##Libraries
+```{r librariesn warning = FALSE, message=FALSE}
+library(RPostgres)
+library(DBI)
+library(tidyverse)
+library(lubridate)
+library(shiny)
+library(glue)
+library(leaflet)
+library(celestial)
+library(tmaptools)
+library(DataExplorer)
+library(scales)
+library(zoo)
+```
+#Datenbank Teil
+##Set-up für Verbindung zur DB
+```{r set-up Verbindung}
+db <- "schneefall_database"
+db_host <- "v000727.edu.ds.fhnw.ch"
+db_port <- "50011"
+db_user <- "schneefall"
+db_pass <- "Klima2023"
+
+conn <- dbConnect(
+  Postgres(),
+  dbname = db,
+  host = db_host,
+  port = db_port,
+  user = db_user,
+  password = db_pass
+)
+
+localconn <- dbConnect(
+  Postgres(),
+  dbname = "snow",
+  host = "localhost",
+  port = "5432",
+  user = "postgres",
+  password = "SQL"
+)
+```
+
+
+```{r Basis-Datensatz erstellen, eval = FALSE}
+country <- "poland"
+
+p1 <- dbGetQuery(conn, glue("select * from {country}
+                            where year between 1950 and 1980
+                            and country = '{country}'"))
+p2 <- dbGetQuery(conn, glue("select * from {country}
+                            where year between 2000 and 2020
+                            and country = '{country}'"))
+
+
+unique(p2$staid)
+unique(p1$staid)
+
+
+stations_string <- paste(unique(p1$staid), collapse = ",")
+
+# p3 <- dbGetQuery(conn, glue("select * from {closest_stations_cn}
+#                             where year between 1950 and 2020
+#                             and staid in ({stations_string})"))
+
+
+p3_clean <- clean_up(p3)
+
+
+# dbDisconnect(conn)
+
+summary(p1)
+
+
+
+# Filter for snow depth > 0 and winter year >= 2021
+#df <- df %>% filter(snowdepth > 0, winter_year >= 2021)
+
+# Find the first day of snow for each winter year
+#df_first_snow <- df %>%
+#  group_by(winter_year) %>%
+#  slice(1)
+```
+
+```{r Datawrangling - Funktion}
+clean_up <- function(x) {
+  x <- x %>%
+    mutate(
+      month = factor(month, levels = c(6, 7, 8, 9, 10, 11, 12, 1, 2, 3, 4, 5)),
+      #staid = as.factor(staid),
+      season = ifelse(month %in% c(10, 11, 12, 1, 2, 3), "winter", "summer")
+    ) %>%
+    distinct()
+  return(x)
+}
+```
+
+
+```{r }
+p1_clean <- clean_up(p1)
+p2_clean <- clean_up(p2)
+
+
+summary(p2_clean)
+
+length(levels(p2_clean$staid))
+length(levels(p1_clean$staid))
+
+fig_1 <- p1_clean %>%
+  select(-c(lat, lon, staname, cn)) %>%
+  filter(sd > 0, month %in% c(9, 10, 11, 12, 1, 2)) %>%
+  group_by(staid, winter_season) %>%
+  arrange(staid, date) %>%
+  distinct() %>%
+  mutate(day = day(date), yearmon = paste(winter_season, month)) %>%
+  slice_min(date) %>%
+  group_by(staid, month) %>%
+  count() %>%
+  ggplot(aes(staid, n, fill = month)) +
+  geom_col(position = "dodge") +
+  scale_fill_brewer(palette = "Blues")
+
+
+
+fig_2 <- p2_clean %>%
+  select(-c(lat, lon, staname, cn)) %>%
+  filter(sd > 0, month %in% c(9, 10, 11, 12, 1, 2)) %>%
+  group_by(staid, winter_season) %>%
+  arrange(staid, date) %>%
+  distinct() %>%
+  mutate(day = day(date), yearmon = paste(winter_season, month)) %>%
+  slice_min(date) %>%
+  group_by(staid, month) %>%
+  count() %>%
+  ggplot(aes(n, staid, fill = month)) +
+  geom_col(position = "dodge") +
+  scale_fill_brewer(palette = "Blues")
+
+
+fig_1
+fig_2
+```
+
+
+```{r }
+summary(p1)
+
+p1 %>%
+  group_by(staid, winter_season, month) %>%
+  mutate(
+    month = factor(month, levels = c(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)),
+    staid = as.factor(staid)
+  ) %>%
+  arrange(year, month) %>%
+  summarize(snow = mean(sd)) %>%
+  ungroup() %>%
+  ggplot(aes(winter_season, snow, color = staid)) +
+  geom_line()
+
+
+
+#p3_clean <- clean_up(p3)
+summary(p1)
+summary(p2)
+```
+
+
+```{r}
+# Create a vector of all dates between September and April
+dates <- seq(as.Date("2021-09-01"), as.Date("2022-04-30"), by = "day")
+md <- format(dates, "%m-%d")
+df_days <- data.frame(format(seq(as.Date("2021-09-01"), as.Date("2022-04-30"), by = "day"), "%m-%d"), day_nr = 1:length(format(seq(as.Date("2021-09-01"), as.Date("2022-04-30"), by = "day"), "%m-%d")))
+
+first_snowday <- function(x) {
+  df <- x %>%
+    filter(winter_season > min(year)) %>%
+    mutate(md = format(date, "%m-%d")) %>%
+    inner_join(df_days, by = "md") %>%
+    filter(sd > 0) %>%
+    group_by(staid, winter_season) %>%
+    slice_min(day_nr)
+  df["period"] <- paste(min(df$year), max(df$year), sep = " - ")
+  return(df)
+}
+
+fs_p1 <- first_snowday(p1_clean)
+fs_p2 <- first_snowday(p2_clean)
+
+
+fs_p1 %>%
+  filter(staid == 58) %>%
+  ggplot(aes(year, day_nr)) +
+  geom_point()
+
+
+combined <- rbind(fs_p1, fs_p2)
+combined$period <- as.factor(combined$period)
+
+summary(combined)
+avg_firstday_p1 <- mean(fs_p1$day_nr)
+avg_firstday_p2 <- mean(fs_p2$day_nr)
+
+# densityplot -> Kurve der ersten Schneetage
+ggplot(combined, aes(x = day_nr, color = period)) +
+  geom_density() +
+  geom_vline(xintercept = avg_firstday_p1, colour = "red", alpha = 0.5) +
+  geom_vline(xintercept = avg_firstday_p2, colour = "blue", alpha = 0.5) +
+  geom_vline(xintercept = 123, colour = "black", alpha = 0.5)
+
+
+
+
+
+ggplot(combined, aes(year, y = mean(hght))) +
+  geom_line()
+```
+
+
+```{r}
+p2_new <- p2_clean %>%
+  filter(season == "winter") %>%
+  mutate(md = format(date, "%m-%d")) %>%
+  inner_join(df_days, by = "md") %>%
+  filter(sd > 0) %>%
+  distinct() %>%
+  group_by(staid, year) %>%
+  slice_min(day_nr)
+
+p2_new["period"] <- "1990-2020"
+
+p1_new <- p1_clean %>%
+  filter(season == "winter") %>%
+  mutate(md = format(date, "%m-%d")) %>%
+  inner_join(df_days, by = "md") %>%
+  filter(sd > 0) %>%
+  distinct() %>%
+  group_by(staid, year) %>%
+  slice_min(day_nr)
+
+p1_new["period"] <- "1950-1970"
+
+
+combined <- rbind(fs_p1, fs_p2)
+combined$period <- as.factor(combined$period)
+
+ggplot(combined, aes(month, day_nr, color = staid)) +
+  geom_boxplot() +
+  facet_grid(~period)
+
+
+
+ggplot(combined, aes(day_nr, staid, fill = staid)) +
+  geom_boxplot() +
+  facet_wrap(~period)
+
+avg_firstday_p1 <- mean(p1_new$day_nr)
+avg_firstday_p2 <- mean(p2_new$day_nr)
+
+
+ggplot(combined, aes(day_nr, staid, fill = period)) +
+  geom_boxplot() +
+  geom_vline(xintercept = avg_firstday_p1, colour = "red", alpha = 0.5) +
+  geom_vline(xintercept = avg_firstday_p2, colour = "blue", alpha = 0.5)
+
+
+avg_firstday_p2 <- mean(subset(p2_new, staid < 950)$day_nr)
+
+avg_firstday_p1 <- mean(subset(p1_new, staid < 950)$day_nr)
+
+# boxplots per station
+combined %>%
+  filter(staid < 950) %>% 
+  group_by(staid, period) %>%
+  summarize(avg_first_day = round(mean(day_nr), 0)) %>%
+  ggplot(aes(avg_first_day, color = period)) +
+  geom_density()+  geom_vline(xintercept = avg_firstday_p2, colour = "blue", alpha = 0.5)+
+  geom_vline(xintercept = avg_firstday_p1, colour = "red", alpha = 0.5)
+  
+
+
+
+
+ggplot(combined, aes(year, y = day_nr, color = period)) +
+  geom_density()
+```
+```{r}
+summary(p1_new)
+#p3_clean <- clean_up(p3)
+ggplot(p1_new, aes(x = winter_season, y = day_nr)) +
+  geom_density()
+```
+
+
+
+```{r}
+df <- p1_clean %>%
+  filter(winter_season > min(year)) %>%
+  mutate(md = format(date, "%m-%d")) %>%
+  inner_join(df_days, by = "md")
+
+df_extreme <- p2_clean %>%
+  filter(winter_season > min(year)) %>%
+  mutate(md = format(date, "%m-%d")) %>%
+  inner_join(df_days, by = "md") %>%
+  arrange(desc(winter_season)) %>%
+  slice(5)
+
+ggplot(df, aes(day_nr, sd, color = ifelse(winter_season >= max(winter_season), "Last year", "other years"))) +
+  geom_point(alpha = 0.1)
+
+
+
+# df_p3 <- p3_clean %>%
+#   filter(winter_season > min(year), season == "winter") %>%
+#   mutate(md = format(date, "%m-%d")) %>%
+#   inner_join(df_days, by = "md")
+
+# 
+# summary(df_p3)
+# 
+# avg_snow_p3 <- mean(df_p3$sd)
+# 
+# 
+# 
+# p3_small <- subset(df_p3, sd > 0 &  staid < 924)
+# unique(p3_small$staid)
+# 
+# ggplot(subset(p3_small, staid == 204), aes(day_nr, sd, color = ifelse(winter_season == max(winter_season), "last year" , "other years"))) +
+#   geom_point(alpha = 0.3) +
+#   geom_line(y = avg_snow_p3, color = "red")+
+#   labs(color = "year")+
+#   scale_color_manual (values = c("last year" = "red", "other years" = "grey"), 
+#                     labels = c("2020", "2018 - 2023"))+
+#   facet_wrap(~staid)
+#   
+# 
+# 
+# ggplot(p3_small) +
+#   geom_point(subset(p3_small, winter_season < max(winter_season)), aes(day_nr, sd, alpha = 0.3)) +
+#   geom_point(subset(p3_small, winter_season == max(winter_season)), aes(day_nr, sd, color = "last year"))
+#   labs(color = "year")+
+#   scale_color_manual (values = c("last year" = "red", "other years" = "grey"), 
+#                     labels = c(winter_season, "2018 - 2023"))+
+#   facet_wrap(~staid)
+#   
+# 
+# 
+# 
+# ggplot(subset(p3_small, staid == 205)) +
+#   geom_point(aes(x = day_nr, y = sd, color = winter_season != max(winter_season)), alpha = 0.3) +
+#   geom_point(data = subset(p3_small, winter_season == max(winter_season)), aes(x = day_nr, y = sd, color = max(winter_season)), alpha = 0.7) +
+#   scale_color_manual(values = c("grey", "red"), labels = c("last year", "other years")) +
+#   labs(x = "Day", y = "Snow Depth", color = "") 
+# 
+# 
+# 
+# ggplot(p3_small) +
+#   geom_point(aes(x = day_nr, y = sd, color = winter_season != max(winter_season)), alpha = 0.3) +
+#   geom_point(data = subset(p3_small, winter_season == max(winter_season)), aes(x = day_nr, y = sd), color = "red", alpha = 0.3) +
+#   scale_color_manual(values = c("red", "grey"), labels = c("Other years", "Last year")) +
+#   labs(x = "Day", y = "Snow Depth", color = "") +
+#   facet_wrap(~staid)
+
+
+```
+
+
+```{r scatterplot schnee 1 Jahr vs alle, eval = FALSE}
+# mental note: check if shiny could loop through each year and highlight them! 
+
+chosen_year <- 1978
+
+#Mehrere Stationen
+ggplot(subset(p3_small)) +
+  geom_point(aes(x = day_nr, y = sd, color = winter_season != max(winter_season)), alpha = 0.3) +
+  geom_point(data = subset(p3_small, winter_season == chosen_year), aes(x = day_nr, y = sd), color = "red", alpha = 0.7) +
+  scale_color_manual(values = c("red", "grey"), labels = c("Other years", "Last year")) +
+  labs(x = "Day", y = "Snow Depth", color = "") 
+
+#eine Station
+
+p3_small_one <- subset(p3_small, staid == min(staid))
+
+ggplot(p3_small_one) +
+  geom_point(aes(x = day_nr, y = sd, color = winter_season != max(winter_season)), alpha = 0.3) +
+  geom_point(data = subset(p3_small_one, winter_season == chosen_year), aes(x = day_nr, y = sd), color = "red", alpha = 0.7) +
+  scale_color_manual(values = c("red", "darkgrey"), labels = c(chosen_year, paste(min(p3_small$winter_season), "-", max(p3_small$winter_season)))) +
+  labs(x = "Day", 
+       y = "Snow Depth", 
+       color = "", 
+       title = paste("Tägliche Schneemenge für Station ", unique(p3_small_one$stahght)),
+       caption = "rot zeigt das ausgewählte Jahr") +
+  theme_minimal()
+
+
+summary(df)
+```
+
+
+
+```{r probabilities of snow per day}
+p1_clean %>%
+  filter(season == "winter") %>%
+  mutate(md = format(date, "%m-%d")) %>%
+  left_join(df_days, by = "md") %>%
+  mutate(snow = ifelse(sd > 0, 1, 0)) %>%
+  group_by(staid, day_nr) %>%
+  summarize(p_snow = round(mean(snow, na.rm = TRUE), 2)) %>% 
+  arrange(day_nr) %>%
+  ggplot(day, p_snow) +
+  geom_line()
+
+
+start_day <- 
+
+cssd1 %>% 
+  mutate(snow40 = ifelse(sd > 40, 1, 0),
+         snow10 = ifelse(sd > 10, 1, 0),
+         snow100 = ifelse(sd > 100, 1, 0),
+         nosnow = ifelse(sd == 0, 1, 0)) %>% 
+  group_by(day_nr) %>% 
+  summarize(p_snow40 = round(mean(snow40, na.rm = TRUE), 2),
+            p_snow10 = round(mean(snow10, na.rm = TRUE), 2),
+            p_snow100 = round(mean(snow100, na.rm = TRUE), 2),
+            p_nosnow = round(mean(nosnow, na.rm = TRUE), 2)) %>% 
+  ggplot()+
+  geom_line(aes(day_nr, p_snow40, color = "40cm"))+
+  geom_line(aes(day_nr, p_snow100, color = "100cm"))+
+  geom_line(aes(day_nr, p_snow10, color = "10cm"))+
+  geom_line(aes(day_nr, p_nosnow, color = "no snow"))+
+  geom_vline(xintercept = 123, colour = "black", alpha = 0.5)
+```
+
+
+```{r probabilities of snow per day - 2 periods}
+cssd1 %>% 
+  mutate(snow40 = ifelse(sd > 40, 1, 0),
+         snow10 = ifelse(sd > 10, 1, 0),
+         snow100 = ifelse(sd > 100, 1, 0),
+         nosnow = ifelse(sd == 0, 1, 0)) %>% 
+  group_by(day_nr, period = ifelse(winter_season > max(winter_season)-10, "last 10 years", "reference period")) %>% 
+  summarize(p_snow40 = round(mean(snow40, na.rm = TRUE), 2),
+            p_snow10 = round(mean(snow10, na.rm = TRUE), 2),
+            p_snow100 = round(mean(snow100, na.rm = TRUE), 2),
+            p_nosnow = round(mean(nosnow, na.rm = TRUE), 2)) %>% 
+  ggplot()+
+  geom_line(aes(day_nr, p_snow40, color = period))+
+  geom_smooth(aes(day_nr, p_snow40,color = "gam"), method = "gam", se = FALSE)+
+  geom_smooth(aes(day_nr, p_snow40, color= "lm"), method = "lm",se = FALSE)+
+  geom_smooth(aes(day_nr, p_snow40, color= "loess"), method = "loess",se = FALSE)+
+  geom_smooth(aes(day_nr, p_snow40, color= "loess"), method = "loess",se = FALSE)+
+
+  scale_x_continuous(breaks = c(15,45,75,105,135,165,195,225),
+                     labels = c("15" = "Sept", "45" = "Okt", "75" = "Nov", "105" = "Dez", "135" = "Jan", "165" = "Feb", "195" = "Mar", "225" = "Apr"))+
+  labs(x = "Monat",
+       y = "Wahrscheinlichkeit")+
+  scale_y_continuous(labels = percent)
+
+
+#--------------using rollmean----------------
+
+cssd1 %>%
+  mutate(snow40 = ifelse(sd > 40, 1, 0),
+         snow10 = ifelse(sd > 10, 1, 0),
+         snow100 = ifelse(sd > 100, 1, 0),
+         nosnow = ifelse(sd == 0, 1, 0)) %>% 
+  group_by(day_nr, period = ifelse(winter_season > max(winter_season)-10, "last 10 years", "reference period")) %>% 
+  summarize(p_snow40 = round(mean(snow40, na.rm = TRUE), 2),
+            p_snow10 = round(mean(snow10, na.rm = TRUE), 2),
+            p_snow100 = round(mean(snow100, na.rm = TRUE), 2),
+            p_nosnow = round(mean(nosnow, na.rm = TRUE), 2),
+            rolling_avg = round(rollmean(snow40, 7, na.pad = TRUE), 2)) %>% # Calculate rolling average of p_snow40
+  ggplot() +
+  geom_line(aes(day_nr, p_snow40, color = period)) + 
+  geom_smooth(aes(day_nr, rolling_avg, color = period),se = FALSE) + 
+  geom_smooth(aes(day_nr, p_snow40, fill = period))
+
+```
+```{r probability_plot cleaned-up}
+
+df_prob <- cssd1 %>%
+  filter(sd >=0) %>% 
+  mutate(snow20 = ifelse(sd > 20, 1, 0),
+         nosnow = ifelse(sd == 0, 1, 0)) %>% 
+  group_by(day_nr, period = ifelse(winter_season > max(winter_season)-10, "last 10 years", "reference period")) %>% 
+  arrange(period) %>% 
+  summarize(p_snow20 = round(mean(snow20, na.rm = TRUE), 2),
+            p_nosnow = round(mean(nosnow, na.rm = TRUE), 2),
+            rolling_avg_p20 = round(rollmean(snow20, 7, na.pad = TRUE), 2))
+
+
+  ggplot(df_prob) +
+  geom_line(aes(day_nr, rolling_avg_p20, color = period)) +
+  geom_smooth(aes(day_nr, rolling_avg_p20, color = period),method = "gam") + 
+  scale_x_continuous(breaks = c(15,45,75,105,135,165,195,225),
+                     labels = c("15" = "Sept", "45" = "Okt", "75" = "Nov", "105" = "Dez", "135" = "Jan", "165" = "Feb", "195" = "Mar", "225" = "Apr"))+
+  labs(x = "Monat",
+       y = "Wahrscheinlichkeit")+
+  scale_y_continuous(labels = percent)
+  
+  
+  
+  df_prob <- cssd1 %>%
+  mutate(snow20 = ifelse(sd > 20, 1, 0),
+         nosnow = ifelse(sd == 0, 1, 0)) %>% 
+  group_by(day_nr, period = ifelse(winter_season > max(winter_season)-10, "last 10 years", "reference period")) %>% 
+  summarize(p_snow20 = round(mean(snow20, na.rm = TRUE), 2),
+            p_nosnow = round(mean(nosnow, na.rm = TRUE), 2))
+  
+  
+  
+  
+ 
+
+```
+
+```{r}
+winters <- subset(p1_clean, season == "winter")
+p1_mean_snow <- mean(subset(p1_clean, season == "winter")$sd, na.rm = TRUE)
+
+p1_clean %>%
+  filter(season == "winter") %>%
+  group_by(winter_season) %>%
+  summarize(avg_snow = mean(sd), difference = avg_snow - p1_mean_snow) %>%
+  ggplot(aes(winter_season, difference)) +
+  geom_col()
+
+
+p2_mean_snow <- mean(subset(p2_clean, season == "winter")$sd, na.rm = TRUE)
+
+p2_clean %>%
+  filter(season == "winter") %>%
+  group_by(winter_season) %>%
+  summarize(avg_snow = mean(sd), difference = avg_snow - p1_mean_snow) %>%
+  arrange(desc(difference)) %>%
+  ggplot(aes(winter_season, difference, fill = ifelse(difference > 0, "blue", "red"))) +
+  geom_hline(yintercept = p2_mean_snow - all_years_average, color = "red") +
+  geom_col()
+
+
+p2_clean %>%
+  filter(season == "winter") %>%
+  group_by(winter_season) %>%
+  summarize(avg_snow = mean(sd), difference = avg_snow - p2_mean_snow) %>%
+  arrange(desc(difference)) %>%
+  ggplot(aes(winter_season, difference, fill = ifelse(difference > 0, "blue", "red"))) +
+  geom_col()
+
+
+p2_clean %>%
+  filter(season == "winter") %>%
+  group_by(winter_season) %>%
+  summarize(avg_snow = mean(sd)) %>%
+  ggplot(aes(winter_season, avg_snow, fill = ifelse(avg_snow - p2_mean_snow < 0, "überdurchschnittlich", "unterdurchschnittlich"))) +
+  geom_hline(yintercept = p2_mean_snow, color = "red") +
+  geom_col()+
+  labs(fill = "schnee")
+```
+
+```{r balkenplot veränderung durchschnitt über die Jahre}
+p1_clean["period"] <- paste(min(p1_clean$year), max(p1_clean$year), sep = " - ")
+p2_clean["period"] <- paste(min(p2_clean$year), max(p2_clean$year), sep = " - ")
+
+all_years <- rbind(p1_clean, p2_clean)
+
+all_years_average <- mean(subset(all_years, season == "winter")$sd, na.rm = TRUE)
+
+
+all_years %>%
+  filter(season == "winter") %>%
+  group_by(winter_season) %>%
+  summarize(avg_snow = mean(sd), difference = avg_snow - all_years_average ) %>%
+  arrange(desc(difference)) %>%
+  ggplot(aes(winter_season, difference, fill = ifelse(difference > 0, "blue", "red"))) +
+  geom_hline(yintercept = p2_mean_snow - all_years_average, color = "red") +
+  geom_hline(yintercept = p1_mean_snow - all_years_average, color = "Blue") +
+  geom_col()
+
+all_years_average <- mean(subset(p3_clean, season == "winter")$sd, na.rm = TRUE)
+
+p3_clean %>%
+  filter(season == "winter") %>%
+  group_by(winter_season) %>%
+  summarize(avg_snow = mean(sd), difference = avg_snow - all_years_average ) %>%
+  arrange(desc(difference)) %>%
+  ggplot(aes(winter_season, difference, fill = ifelse(difference > 0, "blue", "red"))) +
+  geom_hline(yintercept = p2_mean_snow - all_years_average, color = "red") +
+  geom_hline(yintercept = p1_mean_snow - all_years_average, color = "Blue") +
+  geom_col()
+
+```
+```{r lineplot mit verschiednene höhenmetern}
+p3_lines <- p3_clean %>%
+  filter(season == "winter") %>%
+  mutate(height = factor(case_when(
+    hght < 500 ~ "<500",
+    hght < 750 ~ "<750",
+    hght < 1000 ~ "<1000",
+    hght < 1250 ~ "<1250",
+    hght < 1500 ~ "<1500",
+    hght < 1750 ~ "<1750",
+    hght < 2000 ~ "<2000",
+    hght >= 2000 ~ ">2000"
+  ))) %>%
+  group_by(winter_season, height) %>%
+  summarize(snow = mean(sd), difference = all_years_average - snow)
+
+
+
+
+ggplot(p3_lines, aes(winter_season, difference, fill = ifelse(difference > 0, "blue", "red"))) +
+  geom_col()+
+  facet_wrap(~height)
+
+
+ggplot(p3_lines, aes(winter_season, snow, color = height)) +
+  geom_smooth()
+
+
+p3_clean %>%
+  filter(season == "winter") %>%
+  group_by(year) %>%
+  summarize(mean_snow = mean(sd)) %>%
+  ggplot(aes(year, mean_snow)) +
+  geom_smooth()
+
+summary(by_height)
+
+unique(p3$hght)
+
+filter(by_height, height == "<500")
+```
+
+```{r schneereiche Winter}
+all_years %>%
+  filter(season == "winter") %>%
+  mutate(height = case_when(
+    hght < 500 ~ "<500",
+    hght < 1000 ~ "<1000",
+    hght < 1500 ~ "<1500",
+    hght < 2000 ~ "<2000",
+    hght >= 2000 ~ ">2000"
+  )) %>%
+  group_by(period, winter_season, height) %>%
+  summarize(avg_snow = mean(sd)) %>%
+  group_by(height, period) %>%
+  slice_max(avg_snow) %>%
+  arrange(period) %>% 
+  ungroup() %>% 
+  ggplot(aes(winter_season, height, size = avg_snow))+
+  geom_point()
+
+
+
+all_years %>%
+  filter(season == "winter") %>%
+  mutate(height = case_when(
+    hght < 500 ~ "<500",
+    hght < 1000 ~ "<1000",
+    hght < 1500 ~ "<1500",
+    hght < 2000 ~ "<2000",
+    hght >= 2000 ~ ">2000"
+  )) %>%
+  group_by(period, winter_season, height) %>%
+  summarize(avg_snow = mean(sd)) %>%
+  group_by(height, period) %>%
+  slice_min(avg_snow) %>%
+  arrange(period) %>% 
+  ungroup() %>% 
+  ggplot(aes(winter_season, height, fill = avg_snow))+
+  geom_col()
+
+
+esquisse::esquisser()
+```
+
+
+```{r stations as coordintes}
+
+
+
+sta_new <- stations %>%  
+  mutate(coords = map2_dbl(lat,lon,c))
+
+is.numeric(stations$coords)
+n_stations <- 20
+
+save(stations, file = "stations.RData")
+
+closest_station <- stations %>% 
+  rowwise() %>%
+  mutate(distanz = approx_distances(zh, c(lon, lat))) %>%
+  ungroup() %>% 
+  slice_min(distanz, n = ifelse(n_stations < 0, 1, n_stations))
+
+
+
+coords <- c(stations$lat, stations$lon)
+
+
+
+
+```
+
+
+```{r stations as coordin, warning = FALSE}
+
+
+leaflet() %>% 
+  addTiles() %>% 
+  addMarkers(data = closest_station, lng = ~lon, lat = ~lat, popup = ~staname, clusterOptions = markerClusterOptions()) %>% 
+  addsearchOSM()
+
+
+```
+
+```{r statistic bullshit}
+p3_clean <- clean_up(p3)
+
+p3_iqr <- 1.5*IQR(filter(p3_clean, sd > 0)$sd, na.rm = TRUE)
+reference_min <- quantile(filter(p3_clean, season == "winter")$sd, 0.25, na.rm = TRUE)
+reference_max <- quantile(filter(p3_clean, season == "winter")$sd, 0.90, na.rm = TRUE)
+
+reference_max
+reference_min
+
+
+p3_clean %>% 
+  filter(season == "winter") %>% 
+  group_by(stahght,winter_season) %>%
+  summarize(mean_snow = mean(sd)) %>% 
+  ggplot(aes(mean_snow, stahght))+
+  geom_boxplot()
+
+
+
+
+ausreisser <- p3_small %>% 
+  group_by(staid, winter_season) %>% 
+  summarize(avg_snow = mean(sd, na.rm = TRUE), reference_min = quantile) %>%
+  filter(avg_snow <= reference_min | avg_snow > reference_max)
+
+ggplot(ausreisser,(aes(winter_season, avg_snow, fill = ifelse(avg_snow >reference_max, "above", "below"))))+
+  geom_col()+
+  scale_color_manual(values = c("red", "darkgrey"), labels = c("above_aberage", "below average")) +
+  facet_wrap(~staid)
+
+
+ggplot(subset(p3_clean, sd > 0), aes(year, sd))+
+  geom_boxplot()
+
+quantile(filter(p3_clean, sd > 0)$sd, 0.25, na.rm = TRUE)
+filter(p3_clean, sd > 0)
+```
+#shiiinyyy
+```{r shinyzeug - Datensatz erstellen}
+stations <- dbGetQuery(conn, "select distinct(staid), lat,lon,country,hght,stahght,staname   from cdk ")
+
+location <- geocode_OSM("Oslo")$coords
+n_stations <- 5
+
+closest_stations <- stations %>% 
+    rowwise() %>%
+    mutate(distanz = approx_distances(location, (c(lon, lat)))) %>%
+    ungroup() %>% 
+    slice_min(distanz, n = n_stations)
+
+closest_stations_cn <- unique(closest_stations$country)
+staids <-paste0(unique(closest_stations)$staid)
+
+stations_string <- paste(unique(closest_stations$staid), collapse = ",")
+
+cssd <- dbGetQuery(conn, glue("select * from {closest_stations_cn} where staid in ({stations_string})"))
+```
+
+
+```{r shiny - Daten anreichern}
+
+
+#scatterplot, letztes Jahr ist rot
+df_days <- data.frame(md = format(seq(as.Date("2021-09-01"), as.Date("2022-04-30"), by = "day"), "%m-%d"), day_nr = 1:length(format(seq(as.Date("2021-09-01"), as.Date("2022-04-30"), by = "day"), "%m-%d")))
+
+
+cssd1 <- cssd %>%
+  mutate(season = ifelse(month %in% c(9,10, 11, 12, 1, 2, 3,4), "winter", "summer"),) %>% 
+  filter(winter_season > min(year), season == "winter") %>%
+  mutate(md = format(date, "%m-%d")) %>%
+  inner_join(df_days, by = "md")
+```
+
+
+```{r shiny - plots scatterplot alt}
+#--------------------------- Scatterplot Veränderung über die Jahre ----------------------------
+ggplot(cssd1) +
+  geom_point(aes(x = day_nr, y = sd, color = winter_season != max(winter_season)), alpha = 0.7,shape = 8) +
+  geom_line(data = subset(p3_small, winter_season == max(winter_season)), aes(x = day_nr, y = sd), color = "darkblue", alpha = 0.9, shape = 8) +
+  scale_color_manual(values = c("darkblue", "lightblue"), labels = c("Other years", "Last year")) +
+  facet_wrap(~stahght)+
+  labs(x = "Day", 
+       y = "Snow Depth",
+       color = "",
+       title = "mean heights of snow",
+       subtitle = "comparison of latest year with other years") +
+  theme_minimal()
+```
+
+
+```{r shiny - scatterplot neu}
+avg_dev <- cssd1 %>%  group_by(staid, day_nr) %>% summarize(snow = mean(sd))
+
+
+ggplotly(ggplot(cssd) +
+  geom_point(aes(x = day_nr, y = sd, color = winter_season), alpha = 0.5, shape = 8) +
+  geom_smooth(data = avg_dev, aes(x = day_nr, y = snow), color = "red", alpha = 0.7, se = TRUE) +
+  geom_line(data = subset(cssd_1, winter_season == chosen_year), aes(x = day_nr, y = sd), color = "white", size=2) +
+ 
+  #scale_color_manual(values = c("darkblue", "lightblue"), labels = c(chosen_year, paste(min(cssd$winter_season), "-", max(cssd$winter_season)))) +
+  labs(x = "Day", 
+       y = "Snow Depth", 
+       color = "", 
+       title = "Schneehöhen im Winterhalbjahr",
+       caption = "rot: Durchschnittlicher Verlauf der Referenzperiode") +
+  theme_minimal()+
+  facet_wrap(~stahght))
+
+
+
+```
+
+```{r dauer der schneesaison}
+
+density_data <- cssd1 %>%
+  #mutate(season = ifelse(month %in% c(10, 11, 12, 1, 2, 3), "winter", "summer"),) %>% 
+  filter(winter_season > min(year), season == "winter") %>%
+  #mutate(md = format(date, "%m-%d")) %>%
+  #inner_join(df_days, by = "md") %>% 
+  filter(sd > 0) %>%
+  group_by(staid, winter_season, period = ifelse(winter_season > max(winter_season)-10, "compar_per", "ref_per")) %>%
+  slice_min(day_nr) 
+
+ggplot(density_data, aes(x = day_nr, fill = period )) +
+  geom_density(alpha = 0.5) +
+  geom_vline(xintercept = 123, colour = "black", alpha = 0.5)+
+  geom_vline(xintercept = mean(filter(density_data, period == "compar_per")$day_nr), colour = "red")+
+  geom_vline(xintercept = mean(filter(density_data, period == "ref_per")$day_nr), colour = "blue")
+ 
+
+
+
+
+mean(filter(density_data, period == "compar_per")$day_nr, na.rm = TRUE) - mean(filter(density_data, period == "ref_per")$day_nr)
+
+
+```
+```{r dauer mittels lineplot}
+
+cols <- c("ref_per" = "darkblue", "last_10" = "lightblue", "avg" = "red" )
+
+cssd_1 <- cssd1 %>%  
+  filter(staid == min(staid), sd > 0) %>% 
+  group_by (winter_season, period = ifelse(winter_season > max(winter_season)-10, "compar_per", "ref_per")) %>% 
+  summarize(first_day = min(day_nr), last_day = max(day_nr), duration = last_day - first_day)
+
+
+#--------------Balkenplot Winterdauer-----------------
+avg_duration_ref <- mean(subset(cssd_1, period == "ref_per")$duration)
+
+
+cssd_1 %>% 
+  mutate(difference = avg_duration_ref - duration) %>% 
+  ggplot(aes(winter_season, difference, fill = ifelse(difference > 0, "above average", "below average"))) +
+  geom_col()+
+  labs(x = "year",
+       y = "Difference to average",
+       title = "Comparison of winter duration across all years",
+       fill = "")
+
+
+
+#--------------Segment pot-------------------
+ggplot(cssd_1)+
+  #geom_point(aes(last_day, color = "max", winter_season)) +
+  #geom_point(aes(first_day, color = "min", winter_season)) +
+  geom_segment(aes(y = first_day, yend = last_day, x = winter_season, xend = winter_season))+ 
+  geom_smooth(aes(winter_season, first_day))+
+  geom_smooth(aes(winter_season, last_day))+
+  labs(x = "Jahr",
+       y = "Tag"
+    
+  )
+#--------------------Balkenplot mit Trendlinie--------------
+ggplot(cssd_1, aes(winter_season, duration,fill = period))+
+  geom_col()+
+  geom_smooth(aes(winter_season, duration))
+
+
+ggplot(cssd_1) +
+  geom_smooth(aes(x = day_nr, y = sd, color = period)) +
+  geom_smooth(data = avg_dev, aes(x = day_nr, y = snow), color = "purple", alpha = 0.7, se = TRUE) +
+  #scale_color_manual(values = cols, labels = c(chosen_year, paste(min(cssd$winter_season), "-", max(cssd$winter_season)))) +
+  labs(x = "Day", 
+       y = "Snow Depth", 
+       color = "", 
+       title = "Schneehöhen im Winterhalbjahr",
+       caption = "rot: Durchschnittlicher Verlauf der Referenzperiode") +
+  theme_minimal()+
+  facet_wrap(~stahght)
+
+
+```
+
+```{r shiny - plots}
+#--------------------------- Balkenplot Veränderung über die Jahre ----------------------------
+
+overall_avg_snow <- mean(cssd$sd)
+
+cssd %>% 
+  group_by(winter_season, stahght) %>%
+  summarize(avg_snow = mean(sd), difference = avg_snow - overall_avg_snow ) %>%
+  arrange(desc(difference)) %>%
+  ggplot(aes(winter_season, difference, fill = ifelse(difference > 0, "above average", "below average"))) +
+  geom_col()+
+  labs(x = "year",
+       y = "Difference to average",
+       title = "Comparison of mean snow to average across all years",
+       fill = "")+
+  facet_wrap(~stahght)
+
+
+dbGetQuery(conn, "select distinct(s.staid) from switzerland s, austria")
+
+
+#--------------------------- Density Plot 1. Tag mit Schnee ----------------------------
+density_data <- cssd %>%
+  #mutate(season = ifelse(month %in% c(10, 11, 12, 1, 2, 3), "winter", "summer"),) %>% 
+  filter(winter_season > min(year), season == "winter") %>%
+  #mutate(md = format(date, "%m-%d")) %>%
+  #inner_join(df_days, by = "md") %>% 
+  filter(sd > 0) %>%
+  group_by(staid, winter_season, period = cut(winter_season, breaks = 2, labels = c("first period", "second period"))) %>%
+  slice_min(day_nr) 
+
+ggplot(density_data, aes(x = day_nr, fill = period )) +
+  geom_density(alpha = 0.5) +
+  #geom_vline(xintercept = 123, colour = "black", alpha = 0.5)+
+  geom_vline(xintercept = mean(subset(density_data, period = "first period", na.rm = TRUE)$day_nr), colour = "red")+
+  geom_vline(xintercept = mean(subset(density_data, period = "second period", na.rm = TRUE)$day_nr), colour = "blue")+
+  facet_wrap(~stahght)
+
+
+  df["period"] <- paste(min(df$year), max(df$year), sep = " - ")
+
+
+
+dbListTables(conn)
+
+cssd_winter <- subset(cssd, season == "winter")
+
+global_average <- mean(cssd_winter$sd)
+last_year_avg <- mean(subset(cssd_winter, year > max(year)-5)$sd)
+
+diff_avg <- global_average- last_year_avg
+
+
+global_average
+last_year_avg
+diff_avg
+
+0-100*diff_avg / global_average
+100- 100* last_year_avg / global_average
+
+
+
+
+```
+```{r snowdays}
+fourty <- cssd %>% filter(sd > 40) %>% 
+  group_by(stahght, year) %>% 
+  count() 
+
+
+  ggplot(aes(year, n, color = stahght))+
+  geom_smooth(se = FALSE)+
+  ylim(min = 0, max = 120)
+
+
+ten <- cssd %>% filter(sd > 10) %>% 
+  group_by(stahght, year) %>% 
+  count() 
+
+  ggplot(aes(year, n, color = stahght))+
+  geom_smooth(se = FALSE)+
+  ylim(min = 0, max = 120)
+  
+  
+  
+  
+
+ten <- cssd %>% filter(sd > 10) %>% 
+  group_by(stahght, year) %>% 
+  count() %>% 
+  ggplot(aes(year, n, color = stahght))+
+  geom_col()+
+  ylim(min = 0, max = 120)  
+  
+
+```
+
+
+```{r summary statistics pro station für pipeline}
+stupidfile <- dbGetQuery(conn, "select * from cdk where staid = 192")
+#TODO Veränderung Schneemenge, Anz. Schneetage, 1. Schneetag
+summary(stupidfile)
+
+max(stupidfile$year)
+
+
+stupidfile %>% group_by(year) %>% count()
+
+stupidfile %>% 
+  filter((winter_season >= 1950 & winter_season <= 1980) | winter_season >= max(winter_season)-10 ) %>% 
+  group_by(stahght, period = ifelse(winter_season <= 1980 & winter_season >= 1950, "reference_period", "last_years")) %>% 
+  summarize(mean_snow = mean(sd)) %>% 
+  ungroup() %>% 
+  pivot_wider(names_from = period, values_from = mean_snow) %>% 
+  mutate(snow_diff =-1* (1-round(last_years/reference_period, 2)))
+
+#rp = reference period, ly = last 10 years
+
+stupidfile %>% 
+  filter((winter_season >= 1950 & winter_season <= 1980) | winter_season >= max(winter_season)-10) %>%
+      group_by(staid, winter_season) %>%
+      summarize(snow = mean(sd, na.rm = TRUE), 
+                days = mean(sum(ifelse(sd >= 20, 1, 0))),na.rm = TRUE) %>%
+      ungroup() %>% 
+      group_by(staid, period = ifelse(winter_season <= 1980 & winter_season >= 1950, "rp", "ly")) %>%
+      summarize(snow = mean(snow, na.rm = TRUE), 
+                days = mean(days, na.rm = TRUE)) %>%
+      ungroup() %>% 
+      pivot_wider(names_from = period, values_from = c(snow, days)) %>%
+      mutate(
+        snow_diff = round(snow_rp - snow_ly, 2),
+        snow_diff_pct = -1 * (round(snow_diff / snow_rp, 2)),
+        days_diff = round(days_rp - days_ly, 2),
+        days_diff_pct = -1 * round(days_diff / days_rp, 2)
+      ) %>% ungroup() %>% 
+            drop_na()
+
+#Probability of snow > 20 cm
+cssd %>% 
+  filter((winter_season >= 1950 & winter_season <= 1980) | winter_season >= 2012 ) %>% 
+  mutate(snowday = ifelse(sd > 20,1,0),
+         period = ifelse(winter_season <= 1980 & winter_season >= 1950, "reference_period", "last_years")) %>%
+  group_by(stahght, period) %>% 
+  summarize(snow = mean(sd), days = mean(sum(snowday)), prob = round(mean(snowday),2)) %>% 
+pivot_wider(names_from = period, values_from = c(snow, days, prob)) 
+
+#first and last day of snow
+cssd_1 <- cssd1 %>%  
+  filter(staid == min(staid), sd > 0) %>% 
+  group_by (winter_season, period = ifelse(winter_season > max(winter_season)-10, "compar_per", "ref_per")) %>% 
+  summarize(first_day = min(day_nr), last_day = max(day_nr), duration = last_day - first_day)
+
+dbListTables(conn)
+
+
+# Create a vector of all dates between September and April
+dates <- seq(as.Date("2021-09-01"), as.Date("2022-04-30"), by = "day")
+
+df_days <- data.frame(md = format(seq(as.Date("2021-09-01"), as.Date("2022-04-30"), by = "day"), "%m-%d"), 
+                      day_nr = 1:length(format(seq(as.Date("2021-09-01"), as.Date("2022-04-30"), by = "day"), "%m-%d")))
+```
+
+
+```{r fehlerbehebung?}
+stupidfile %>% 
+  mutate(md = format(date, "%m-%d")) %>%
+      inner_join(df_days, by = "md") %>%
+      filter(sd > 0, 
+             (winter_season >= 1950 & winter_season <= 1980) | winter_season >= max(winter_season)-10) %>%
+      group_by(staid, winter_season, period = ifelse(winter_season <= 1980 & winter_season >= 1950, "rp", "ly")) %>%
+      summarize(first = min(day_nr), 
+                last = max(day_nr)) %>%
+      group_by(staid, period) %>%
+      summarize(avg_first = mean(first, na.rm = TRUE),
+                avg_last = mean(last,na.rm = TRUE), 
+                avg_dur = mean(last - first, na.rm = TRUE)) %>%
+      ungroup() %>%
+      pivot_wider(names_from = period,
+                  values_from = c(avg_first, avg_last, avg_dur)) %>%
+      mutate(
+        first_day_diff = round(avg_first_ly - avg_first_rp, 2),
+        last_day_diff = round(avg_last_ly - avg_last_rp, 2),
+        dur_diff = round(avg_dur_ly - avg_dur_rp, 2),
+        dur_diff_pct = -1 * round(dur_diff / avg_dur_rp, 2)
+      ) %>%  ungroup() %>% 
+      drop_na()
+
+staid <- 487
+
+paste0("sta_", staid)
+
+```
+
+
+
+
+```{r}
+
+
+ch_shiny %>% 
+  filter(month %in% c(1,2,3,4,10,11,12)) %>% 
+  mutate(month = factor(month, levels = c(10,11,12,1,2,3,4),
+                        labels = c("Okt", "Nov", "Dez", "Jan", "Feb", "Mar", "Apr"))) 
+
+countries <- c("switzerland", "poland")
+stalist <- stations$staid
+stations_corrected <- paste0("sta_", stalist)
+
+# Generate dynamic query string
+query <- paste("SELECT stahght, sd, day_nr, season FROM ", paste(stations_corrected, collapse = " UNION SELECT stahght, sd, day_nr, season FROM "), sep = "")
+
+#dbGetQuery(conn, glue("select distinct(staid) from {test}"))
+# Execute query and retrieve data
+data_country <- dbGetQuery(conn, query)
+
+# Combine data into one dataframe
+combined_data <- bind_rows(data_country)
+
+sta_1 <- subset(cssd, staid == min(staid))
+sta_2 <- subset(cssd, staid == max(staid))
+
+dbWriteTable(conn, "sta_2", sta_2)
+
+dbRemoveTable(conn, "2")
+
+
+dbListTables(conn)
+```
+

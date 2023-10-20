@@ -1,0 +1,115 @@
+---
+title: "R Notebook"
+output: 
+---
+##Libraries
+```{r libraries}
+library(RPostgres)
+library(DBI)
+library(tidyverse)
+library(lubridate)
+library(shiny)
+library(glue)
+library(leaflet)
+library(celestial)
+
+library(DataExplorer)
+```
+
+```{r set-up Verbindung}
+db <- "schneefall_database"
+db_host <- "v000727.edu.ds.fhnw.ch"
+db_port <- "50011"
+db_user <- 'schneefall'
+db_pass <- "Klima2023"
+
+conn <- dbConnect(
+  Postgres(),
+  dbname = db,
+  host = db_host,
+  port = db_port,
+  user = db_user,
+  password = db_pass
+)
+
+# localconn <- dbConnect(
+#   Postgres(),
+#   dbname = "snow",
+#   host = "localhost",
+#   port = "5432",
+#   user = 'postgres',
+#   password = 'SQL'
+# )
+
+```
+
+```{r Tabellennamen / Spaltennamen}
+
+#alle Tabellen auf der DB anzeigen
+dbListTables(conn)
+
+
+#Alle Spalten einer bestimmten Tabelle anzeigen
+dbListFields(conn, "snow_final") 
+
+
+
+```
+
+#Abfragen mit SQL
+```{r}
+
+#Variablen definieren
+tabelle <- "cdk"
+month <- 12 
+year <- 1990
+country <- "sweden"
+height <- 60
+staids <- c(1,21)
+
+#filtern mit nur einem Wert zum Vergleich
+#wichtig: bei Strings muss die {} noch mit Anführungszeichen umgeben werden, sonst klappt die Abfrage nicht. 
+query <- glue("SELECT * 
+              FROM {tabelle} 
+              WHERE year = {year} 
+              AND month = '{month}'
+              AND hght > {height} 
+              AND country = '{country}'")
+
+dbGetQuery(conn, query)
+
+#Einzigartige Werte finden (z.B. um zu prüfen, welche Länder in der DB stehen)
+query2 <- glue("select distinct(country) from cdk")
+
+
+#filtering mit einem Range:
+months <- c(12,1,2,3)
+years <- c(1990, 2020)
+
+months_as_string <- paste(months, collapse = ",") # converts the list of numbers to a string
+new_string <- 
+
+
+query2 <- glue("select * from cdk where year between {years[1]} and {years[2]} and staid in ({months_as_string}) limit 6")
+
+dbGetQuery(conn, query2)
+
+dbListFields(conn, "snow")
+
+dbGetQuery(conn, "select * from snow limit 1")
+
+```
+
+
+```{r}
+country <- "sweden"
+
+query <- glue("select * from {tabelle} where year = 1990 and country = '{country}'")
+
+dbGetQuery(conn, query)
+```
+
+```{r}
+
+```
+

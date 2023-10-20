@@ -1,0 +1,99 @@
+# Merge the temperature and precipitation dataframes and calculate snow_depth data for the countries Finland, France, Italy and Spain
+```{r}
+library(tidyverse)
+library(dplyr)
+```
+
+# Merge the temperature and precipitation dataframes 
+```{r}
+countries <- merge(temperature, precipitation, by = c("id", "station", "country", "latitude", "longitude", "height", "date"), all = FALSE)
+
+# Place the date column after the id column and the station column after the country column
+countries <- countries |> 
+  relocate(date, .after = id) |> 
+  relocate(station, .after = country)
+
+# Convert precipitation values from 0.1 mm to 1 mm
+countries$precipitation <- countries$precipitation / 10
+
+# Convert temperature values from 0.1 Degrees Celsius to 1 Degrees Celsius
+countries$temperature <- countries$temperature / 10
+```
+
+
+# Create the snow_depth column and calculate the snow depth
+```{r}
+# Sort the dataframe by country, then by station, then by date
+countries <- countries |> arrange(country, station, date)
+
+# Create the snow_depth column with all values set to 0
+countries$snow_depth <- 0
+
+# Initialize previous snow depth value
+prev_snow_depth <- 0
+
+# Loop through each row
+for (i in 1:nrow(countries)) {
+  # If temperature is less than 0
+  if (countries$temperature[i] < 0) {
+    # Add precipitation to snow depth
+    countries$snow_depth[i] <- countries$snow_depth[i] + countries$precipitation[i]
+  }
+  
+  # Calculate 10% of snow_depth of the previous day
+  tenth <- 0.1 * prev_snow_depth
+  
+  # Calculate the amount of snow to transfer from the previous day according to current temperature and snow quantity of the previous day  
+  if (countries$temperature[i] < 5) {
+    if (tenth < 1) {
+      countries$snow_depth[i] <- countries$snow_depth[i] + (max(0, prev_snow_depth - 1))
+    } else if (tenth > 5) {
+      countries$snow_depth[i] <- countries$snow_depth[i] + (prev_snow_depth - 5)
+    } else {
+      countries$snow_depth[i] <- countries$snow_depth[i] + (0.9 * prev_snow_depth)
+    }
+  } else if (countries$temperature[i] >= 5 && countries$temperature[i] < 10) {
+    if (tenth < 2) {
+      countries$snow_depth[i] <- countries$snow_depth[i] + (max(0, prev_snow_depth - 2))
+    } else if (tenth > 8) {
+      countries$snow_depth[i] <- countries$snow_depth[i] + (prev_snow_depth - 8)
+    } else {
+      countries$snow_depth[i] <- countries$snow_depth[i] + (0.8 * prev_snow_depth)
+    }
+  } else {
+    if (tenth < 3) {
+      countries$snow_depth[i] <- countries$snow_depth[i] + (max(0, prev_snow_depth - 3))
+    } else if (tenth > 10) {
+      countries$snow_depth[i] <- countries$snow_depth[i] + (prev_snow_depth - 10)
+    } else {
+      countries$snow_depth[i] <- countries$snow_depth[i] + (0.5 * prev_snow_depth)
+    }
+  }
+  
+  # If the temperature is 2 or more, precipitation is rain and melts away snow at a ratio of precipitation / 2
+  if (countries$temperature[i] >= 2) {
+    countries$snow_depth[i] <- countries$snow_depth[i] - (countries$precipitation[i] / 2)
+  }
+  
+  # Round snow depth to 1 decimal place and ensure it's neither negative nor higher than 700
+  countries$snow_depth[i] <- max(min(round(countries$snow_depth[i], 1), 700), 0)
+  
+  # Set previous snow depth to current snow depth for next iteration
+  prev_snow_depth <- countries$snow_depth[i]
+}
+
+```
+
+# Delete the temperature and precipitation columns 
+```{r}
+countries <- countries |> select(-temperature, -precipitation)
+```
+
+# Combine the countries dataframe with the snow_depth dataframe to create the final dataframe containing snow_depth data for all countries in Europe
+```{r}
+cdk1 <- rbind(snow_depth, countries)
+
+# Sort the dataframe by country, then by station, then by date
+cdk1 <- cdk1 |> arrange(country, station, date)
+```
+

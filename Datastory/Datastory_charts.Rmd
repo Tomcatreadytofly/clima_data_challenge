@@ -1,0 +1,290 @@
+---
+title: "Challenge Data Wrangling"
+output: html_notebook
+---
+In diesem Notebook soll das Data Wrangling und EDA zum Storytelling-Artikel gemacht werden. 
+
+#Setup
+```{r}
+#install.packages("tidyr")
+#install.packages("tidyverse")
+#install.packages("dplyr")
+#install.packages("ggplot2")
+#install.packages("esquisse")
+```
+
+```{r}
+library(esquisse)
+library(tidyr)
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+```
+#Schweiz finden
+```{r}
+#Stations einlesen, damit ich herausfinden kann, welche Textfiles zu den Schweizer Stationen gehören
+setwd("C:/Users/chant/Documents/Klimadaten Challenge/Daten für Story")
+stationen <- read.delim("stations.txt", header = TRUE, sep = ",")
+```
+
+```{r}
+#Neue Spaltennamen eingeben
+colnames(stationen) <- c("Station_ID", "Stationname", "Country", "Lat", "Lon", "Height")
+```
+
+```{r}
+#Abstände entfernen
+stationen$Country <- gsub("\\s", "", stationen$Country)
+```
+
+```{r}
+#Wichtig! Es hat den Scheiss mit Abstand eingelesen -.-
+schweiz <- subset(stationen, Country == "SWITZERLAND")
+```
+#Daten einlesen und säubern
+Die typischen Skigebiete sind Engelberg, Andermatt, Davos und Säntis. Deshalb werde ich zunächst diese einlesen. 
+```{r}
+#Daten für Schneetiefe einlesen und dabei die ersten 20 Zeilen überspringen
+setwd("C:/Users/chant/Documents/Klimadaten Challenge/Daten für Story")
+#saentis <- read.csv2("saentis.csv", header = FALSE, sep = ";")
+#andermatt <- read.delim("andermatt.csv", header = FALSE, sep = ";")
+#davos <- read.delim("davos.csv", header = FALSE, sep = ";")
+#engelberg <- read.delim("engelberg.csv", header = FALSE, sep = ";")
+frosttage <- read.delim("Frosttage.csv", header = FALSE, sep = ";")
+```
+```{r}
+#Neue Spaltennamen geben
+spalten <- c("ID", "Jahr", "Durchschnitt Jahr", "Winterhalbjahr", "Sommerhalbjahr", "Wintermonate", "Frühlingsmonate", "Sommermonate", "Herbstmonate", "Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember")
+colnames(saentis) <- spalten
+colnames(engelberg) <- spalten
+colnames(andermatt) <- spalten
+colnames(davos) <- spalten
+```
+
+```{r}
+#NAs setzen
+saentis <- saentis %>% mutate_all(na_if, -999999)
+davos <- davos %>% mutate_all(na_if, -999999)
+engelberg <- engelberg %>% mutate_all(na_if, -999999)
+andermatt <- andermatt %>% mutate_all(na_if, -999999)
+```
+
+##Schneemenge in Zentimetern anzeigen
+```{r}
+andermatt <- andermatt %>%
+  mutate_at(vars(3:22), ~ . / 100)
+```
+
+#Plots
+##Lineplots
+```{r}
+ggplot(andermatt) +
+  aes(x = Jahr, y = `Durchschnitt Jahr`) +
+  geom_line(colour = "#112446") +
+  ggtitle("Die gesamte Schneemenge pro Jahr in Andermatt")+
+  ylab("Schneemenge in cm")+
+  theme_minimal()
+```
+```{r}
+ggplot(andermatt) +
+  aes(x = Jahr, y = `Durchschnitt Jahr`) +
+  geom_line(colour = "#78aed3") +
+  geom_smooth(method = "lm", se = FALSE, colour = "red") +  # Hinzufügen der Trendlinie
+  ggtitle("Schneemenge pro Jahr in Andermatt") +
+  ylab("Schneemenge in cm") + 
+  labs(subtitle = "Die gesamte Schneemenge seit 1951 bis 2023 mit einer roten Trendlinie") +
+  theme_minimal()
+```
+
+
+```{r}
+ggplot(andermatt) +
+  aes(x = Jahr, y = Wintermonate) +
+  geom_line(colour = "#112446") +
+  ggtitle("Entwicklung der Schneemenge in den Wintermonaten")+
+  ylab("Schneemenge in cm")+
+  theme_minimal()
+```
+
+```{r}
+ggplot(andermatt) +
+  aes(x = Jahr, y = Herbstmonate) +
+  geom_line(colour = "#112446") +
+  ggtitle("Entwicklung der Schneemenge in den Herbstmonaten")+
+  ylab("Schneemenge in cm")+
+  theme_minimal()
+```
+
+```{r}
+ggplot(andermatt) +
+  aes(x = Jahr, y = Frühlingsmonate) +
+  geom_line(colour = "#112446") +
+   ggtitle("Entwicklung der Schneemenge in den Frühlingsmonaten")+
+  ylab("Schneemenge in cm")+
+  theme_minimal()
+```
+
+```{r}
+ggplot(andermatt) +
+  aes(x = Jahr, y = Dezember) +
+  geom_line(colour = "#112446") +
+  ggtitle("Entwicklung der Schneemenge im Dezember jedes Jahres")+
+  ylab("Schneemenge in cm")+
+  theme_minimal()
+```
+##Barplots
+```{r}
+andermatt$Dezember <- as.numeric(andermatt$Dezember)
+andermatt$Jahr <- as.numeric(andermatt$Jahr)
+ggplot(andermatt)+
+  aes(x = Jahr, weight = Dezember)+
+  geom_bar(fill = "deepskyblue")+
+  ylab("Schneemenge in cm")+
+  ggtitle("Gesamte Schneemenge von jedem Dezember in Andermatt")+
+  theme_minimal()
+```
+```{r}
+andermatt$schneemenge_total <- as.numeric(andermatt$schneemenge_total)
+andermatt$Jahr <- as.numeric(andermatt$Jahr)
+ggplot(andermatt)+
+  aes(x = Jahr, weight = schneemenge_total)+
+  geom_bar(fill = "blue")+
+  ylab("Schneemenge in cm")+
+  ggtitle("Gesamte Schneemenge in Andermatt pro Jahr")+
+  theme_minimal()
+```
+```{r}
+andermatt$schneemenge_total <- as.numeric(andermatt$schneemenge_total)
+andermatt$Jahr <- as.numeric(andermatt$Jahr)
+ggplot(andermatt)+
+  aes(x = Jahr, weight = April)+
+  geom_bar(fill = "#78aed3")+
+  ylab("Schneemenge in cm")+
+  ggtitle("Schneemenge in jedem April")+
+  labs(subtitle = "Die drei Farben zeigen, ab welcher Schneemenge es ideal, möglich und kritisch zum Skifahren ist.")+
+  geom_hline(yintercept = 40, color = "green")+
+  geom_hline(yintercept = 30, color = "yellow")+
+  geom_hline(yintercept = 20, color = "red")+
+  theme_minimal()
+```
+
+```{r}
+andermatt$schneemenge_total <- as.numeric(andermatt$schneemenge_total)
+andermatt$Jahr <- as.numeric(andermatt$Jahr)
+
+ggplot(andermatt) +
+  aes(x = Jahr, weight = April) +
+  geom_bar(fill = "#78aed3") +
+  ylab("Schneemenge in cm") +
+  ggtitle("Schneemenge in jedem April") +
+  labs(subtitle = "Die drei Farben zeigen, ab welcher Schneemenge es ideal, möglich und kritisch zum Skifahren ist.") +
+  geom_hline(yintercept = 40, color = "green") +
+  geom_hline(yintercept = 30, color = "yellow") +
+  geom_hline(yintercept = 20, color = "red") +
+  theme_minimal() +
+  theme(legend.position = "right") +
+  guides(fill = guide_legend(title = "Schneemenge", override.aes = list(fill = c("green", "yellow", "red"))),
+         color = guide_legend(title = "Schneemenge", override.aes = list(color = c("green", "yellow", "red"))))
+```
+
+
+```{r}
+davos$schneemenge_total <- davos$Januar + davos$Februar + davos$März + davos$April + davos$Mai + davos$Juni + davos$Juli + davos$August + davos$September + davos$Oktober + davos$November + davos$Dezember
+```
+
+```{r}
+davos$schneemenge_total <- as.numeric(davos$schneemenge_total)
+davos$Jahr <- as.numeric(davos$Jahr)
+ggplot(davos)+
+  aes(x = Jahr, weight = schneemenge_total)+
+  geom_bar(fill = "deepskyblue")+
+  ylab("Schneemenge in cm")+
+  ggtitle("Gesamte Schneemenge in Davos")+
+  theme_minimal()
+```
+```{r}
+engelberg$schneemenge_total <- engelberg$Januar + engelberg$Februar + engelberg$März + engelberg$April + engelberg$Mai + engelberg$Juni + engelberg$Juli + engelberg$August + engelberg$September + engelberg$Oktober + engelberg$November + engelberg$Dezember
+```
+
+```{r}
+engelberg$schneemenge_total <- as.numeric(engelberg$schneemenge_total)
+engelberg$Jahr <- as.numeric(engelberg$Jahr)
+ggplot(engelberg)+
+  aes(x = Jahr, weight = schneemenge_total)+
+  geom_bar(fill = "deepskyblue")+
+  ylab("Schneemenge in cm")+
+  ggtitle("Gesamte Schneemenge in Engelberg")+
+  theme_minimal()
+```
+#Andermatt
+```{r}
+andermatt$schneemenge_total <- andermatt$Januar + andermatt$Februar + andermatt$März + andermatt$April + andermatt$Mai + andermatt$Juni + andermatt$Juli + andermatt$August + andermatt$September + andermatt$Oktober + andermatt$November + andermatt$Dezember
+durchschnitt_andermatt = mean(andermatt$Januar + andermatt$Februar + andermatt$März + andermatt$April + andermatt$Mai + andermatt$Juni + andermatt$Juli + andermatt$August + andermatt$September + andermatt$Oktober + andermatt$November + andermatt$Dezember)
+```
+
+```{r}
+class(andermatt$Januar)
+andermatt$Januar <- as.numeric(andermatt$Januar)
+andermatt$Februar <- as.numeric(andermatt$Februar)
+andermatt$März <- as.numeric(andermatt$März)
+andermatt$April <- as.numeric(andermatt$April)
+andermatt$Mai <- as.numeric(andermatt$Mai)
+andermatt$Juni <- as.numeric(andermatt$Juni)
+andermatt$Juli <- as.numeric(andermatt$Juli)
+andermatt$August <- as.numeric(andermatt$August)
+andermatt$September <- as.numeric(andermatt$September)
+andermatt$Oktober <- as.numeric(andermatt$Oktober)
+andermatt$November <- as.numeric(andermatt$November)
+andermatt$Dezember <- as.numeric(andermatt$Dezember)
+```
+
+```{r}
+andermatt$schneemenge_total <- as.numeric(andermatt$schneemenge_total)
+andermatt$Jahr <- as.numeric(andermatt$Jahr)
+ggplot(andermatt)+
+  aes(x = Jahr, weight = schneemenge_total)+
+  geom_bar(fill = "deepskyblue")+
+  ylab("Schneemenge in cm")+
+  ggtitle("Gesamte Schneemenge in Andermatt")+
+  theme_minimal()+
+  geom_hline(yintercept = durchschnitt_andermatt, colour = "red")
+```
+
+```{r}
+durchschnitt_wintermonate <- mean(andermatt$Wintermonate)
+ggplot(andermatt)+
+  aes(x = Jahr, weight = Wintermonate)+
+  geom_bar(fill = "deepskyblue")+
+  ylab("Schneemenge in cm")+
+  ggtitle("Schneemenge in den Wintermonaten")+
+  theme_minimal()+
+  geom_hline(yintercept = durchschnitt_wintermonate, colour = "red")
+```
+
+#Frosttage
+```{r}
+frosttage <- slice(frosttage, -1)
+frost_spalten <- c("Jahr", "Basel-Binningen", "Bern-Zollikofen", "Davos", "Genf-Cointrin", "Locarno-Monti", "Lugano", "Luzern", "Neuenburg", "Säntis", "Samedan", "Sitten", "St. Gallen", "Zürich-Fluntern")
+colnames(frosttage) <- frost_spalten
+```
+
+```{r}
+frosttage$Jahr <- as.numeric(frosttage$Jahr)
+frosttage$`Basel-Binningen` <- as.numeric(frosttage$`Basel-Binningen`)
+frosttage$`Bern-Zollikofen` <- as.numeric(frosttage$`Bern-Zollikofen`)
+frosttage$Davos <- as.numeric(frosttage$Davos)
+frosttage$`Genf-Cointrin` <- as.numeric(frosttage$`Genf-Cointrin`)
+frosttage$`Locarno-Monti` <- as.numeric(frosttage$`Locarno-Monti`)
+frosttage$Lugano <- as.numeric(frosttage$Lugano)
+frosttage$Luzern <- as.numeric(frosttage$Luzern)
+```
+
+```{r}
+ggplot(frosttage)+
+  aes(x = Jahr, weight = Davos)+
+  geom_bar(fill = "blue")+
+  ylab("Anzahl Frosttage")+
+  ggtitle("Verlauf der Anzahl Frosttage pro Jahr in Davos")+
+  theme_minimal()
+```
+

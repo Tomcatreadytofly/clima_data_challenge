@@ -1,0 +1,79 @@
+```{r}
+library(dplyr)
+library(tidyverse)
+```
+
+
+# Reading the combined dataframe with all station measurements
+```{r}
+combined <- read.table(file = "combined.txt", header = FALSE)
+# Keep only observations from the year 1923 and later
+# combined <- combined[combined$Jahr > 1922, ]
+
+# Remove any observations containing NAs
+# combined <- na.omit(combined)
+```
+
+# Renaming of variables
+
+```{r}
+colnames(combined) <- c("id", "year", "calendar_year", "winter_semester", "summer_semester", "winter_months", "spring_months", "summer_months", "autumn_months", "january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december")
+```
+
+# Conversion of all -999999 values to NAs
+
+```{r}
+combined[combined == -999999] <- NA
+```
+
+# Conversion of the int data type to num (so decimals can be displayed) and the units from 0.01 cm to cm
+
+```{r}
+combined <- combined |> mutate_all(as.numeric)
+
+combined <- combined |> 
+  mutate_at(vars(-id, -year), funs(. / 100))
+```
+
+
+# Reading and modifying the stations.txt file 
+```{r}
+stations <- read.delim(file = "stations.txt", header = TRUE, skip = 15, sep = ",")
+stations <- stations |> rename(id = STAID, station = STATIONNAME, country = COUNTRYNAME, latitude = LAT, longitude = LON, height = HGT)
+stations$height <- as.numeric(stations$height)
+stations <- na.omit(stations)
+
+# Remove leading and trailing space in country names
+stations$country <- trimws(stations$country, which = c("both"))
+# Remove leading and trailing space in station names
+stations$station <- trimws(stations$station, which = c("both"))
+
+#Converting all country names to lower case
+stations$country <- tolower(stations$country)
+
+#Converting all station names to lower case
+stations$station <- tolower(stations$station)
+```
+
+# Keeping a maximum of 50 stations per country.
+
+```{r}
+# stations_reduced <- stations %>%
+#   group_by(country) %>%
+#   mutate(n_obs = n()) %>%
+#   ungroup() %>%
+#   mutate(keep = ifelse(n_obs <= 50, n_obs, 50)) %>%
+#   group_split(country) %>%
+#   map(~if(nrow(.) >= 50) sample_n(., size = first(keep), replace = FALSE) else .) %>%
+#   bind_rows() %>%
+#   select(-n_obs, -keep)
+```
+
+# Merging the two dataframes by "id" column 
+
+```{r}
+merged <- merge(combined, stations, by = "id", all = FALSE)
+write.csv(merged, "merged.csv", row.names = FALSE)
+head(merged)
+```
+

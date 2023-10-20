@@ -1,0 +1,334 @@
+---
+title: "R Notebook"
+output: 
+---
+```{r libraries}
+library(RPostgres)
+library(DBI)
+library(tidyverse)
+library(lubridate)
+library(glue)
+library(celestial)
+
+```
+#Datenbank Teil
+##Set-up für Verbindung zur DB
+```{r set-up Verbindung}
+db <- "schneefall_database"
+db_host <- "v000727.edu.ds.fhnw.ch"
+db_port <- "50011"
+db_user <- 'schneefall'
+db_pass <- "Klima2023"
+
+conn <- dbConnect(
+  Postgres(),
+  dbname = db,
+  host = db_host,
+  port = db_port,
+  user = db_user,
+  password = db_pass
+)
+
+
+```
+
+
+##Stations File vorbereiten: Bereinigen & als neuen Dataframe speichern
+```{r Stations}
+
+file <-  "C:/Users/Antonia/Documents/Studium/4_FS_2023/cdk1/zips/snowdepth.zip"
+stations <- read_csv(unzip(file, "stations.txt"),col_types = 'icccci',  skip = 17, na = c("NA", "-999", "9999", "-9999")) 
+
+
+europe <-  c("GB", "IE", "PL", "AT", "HU", "SK", "SI", "DK", "DE", "MD", "UA", "BY", "LV", "LT", "EE", "NL", "CH", "LU", "IS", "FR", "SP", "IT", "ME", "SR", "HR", "SE", "NO", "FI", "RU", "SJ")
+
+continental <- c("GB", "IE", "PL", "AT", "HU", "SK", "DE", "SI", "DK", "MD", "UA", "BY", "LV", "LT", "EE", "NL", "CH", "LU", "IS", "FR")
+subtropic <- c("SP", "IT", "ME", "SR", "HR")
+subpolar <- c("SE", "NO", "FI", "RU", "SJ")
+
+st <- stations %>% 
+  filter(CN %in% europe) %>% 
+   mutate(country = recode(CN, 
+                           "AM" = "armenia",
+                           "AT" = "austria",
+                           "AZ" = "azerbaijan",
+                           "BY" = "belarus",
+                           "CH" = "switzerland",
+                           "DE" = "germany",
+                           "DK" = "denmark",
+                           "EE" = "estonia",
+                           "ES" = "spain",
+                           "FI" = "finland",
+                           "FR" = "france",
+                           "GB" = "united kingdom",
+                           "GE" = "georgia",
+                           "GL" = "greenland",
+                           "HR" = "croatia",
+                           "HU" = "hungary",
+                           "IE" = "ireland",
+                           "IS" = "iceland",
+                           "IT" = "italy",
+                           "KZ" = "kazakhstan",
+                           "KG" = "kyrgyzstan",
+                           "LV" = "latvia",
+                           "LT" = "lithuania",
+                           "LU" = "luxembourg",
+                           "MD" = "moldova",
+                           "ME" = "montenegro",
+                           "NL" = "netherlands",
+                           "NO" = "norway",
+                           "PL" = "poland",
+                           "RS" = "serbia",
+                           "RU" = "russia",
+                           "SE" = "sweden",
+                           "SI" = "slovenia",
+                           "SK" = "slovakia",
+                           "SJ" = "svalbard and jan mayen",
+                           "TM" = "turkmenistan",
+                           "TJ" = "tajikistan",
+                           "UA" = "ukraine",
+                           "UZ" = "uzbekistan")) %>% 
+  rename_all(tolower)%>%
+  mutate(s = as.numeric(substr(lon, 2,4))) %>% 
+  filter(s < 90) %>% 
+  mutate(lon = dms2deg(lon),
+       lat = dms2deg(lat),
+       region = case_when(
+         cn %in% continental ~ "continental",
+         cn %in% subpolar ~ "subpolar",
+         cn %in% subtropic ~ "subtropic"),
+       staname = tolower(staname),
+       stahght = paste0(stringr::str_to_title(staname), ", ", hght, "m"),
+       cn = tolower(cn)) %>% 
+  
+  select(-s) 
+
+
+#Stationen nach Regionen einteilen -> mutate region = case when blablabla
+
+
+```
+##Pipeline Messwerte
+
+```{r Liste von Dateien erstellen}
+stations_to_loop <- filter(st, cn != "DE")
+
+station_ids <- formatC(stations_to_loop$staid, width = 6, format = "d", flag = "0")
+```
+
+
+```{r Pipeline-Funktion}
+
+
+pipeline <- function(station, skip, tabellenname, threshhold) {
+   for (i in station) {
+    i_new <- paste0("SD_STAID", station, ".txt")
+    df <- read_csv(unzip(datei, i_new), col_types = 'iicii', skip = skip, na = c("NA", "-9999"))
+    file.remove(i_new)
+    new_data <- df %>% 
+      rename_at(5, ~'Q') %>% 
+      filter(Q != 9) %>%
+      filter(SD >= 0) %>% 
+      mutate(DATE = as_date(DATE), 
+            year = year(DATE), 
+            month = month(DATE))%>% 
+      rename_all(tolower) %>% 
+      select(-c(q, souid)) %>% 
+      mutate(winter_season = ifelse(month  %in% c(9,10,11,12), year, year-1))
+    
+    new_data <- inner_join(new_data, st, by = "staid")
+    
+    if (nrow(new_data)< threshhold){
+      print(paste("skipped file: ", i))
+      next
+    }
+    
+    country_table <- unique(new_data$country)
+    dbWriteTable(conn, tabellenname, new_data, temporary = FALSE, append = TRUE) #Schreibt die Daten in die Datenbank
+    dbWriteTable(conn, country_table, new_data, temporary = FALSE, append = TRUE)
+    print(paste(i, "ok!"))
+
+}
+}
+
+```
+
+
+```{r Pipeline-Funktion aufrufen}
+#newlist <- slice(files, 6147:9884)
+
+
+for (i in station_ids){
+pipeline(i, 22, "cdk", 200)
+  }
+
+```
+
+```{r Verbindung / Erfolg testen & bereinigen, eval = FALSE}
+
+dbListTables(conn)
+dbGetQuery(conn, "select distinct(staid) from snow_final")
+
+dbRemoveTable(conn, "snow_final")
+
+```
+
+```{r Debugging / Fehler eruieren, eval = FALSE}
+
+df <- read_csv(unzip(datei, "SD_STAID003194.txt"), skip = 22, na = c("NA", "-9999"))
+df_new <- df %>% 
+      rename_at(5, ~'Q') %>% 
+      filter(Q != 9) %>% 
+      mutate(DATE = as.character(DATE)) %>% 
+      mutate(DATE = as_date(DATE), 
+             year = year(DATE), 
+             month = factor(month(DATE)), 
+             STAID = as.factor(STAID),
+             SD = as.numeric(SD)) %>% 
+      rename_all(tolower) 
+   
+summary(df_new)    
+nrow(df_new)
+
+
+newlist <- slice(files, 895:905)
+
+pipeline_newlist <- function(slice, skip, tabellenname) {
+   for (i in slice) {
+    df <- read_csv(unzip(datei, i), skip = skip, na = c("NA", "-9999"))
+    file.remove(i)
+    new_data <- df %>% 
+      rename_at(5, ~'Q') %>% 
+      filter(Q != 9) %>% 
+      mutate(DATE = as.character(DATE)) %>% 
+      mutate(DATE = as_date(DATE), 
+             year = year(DATE), 
+             month = factor(month(DATE)), 
+             STAID = as.factor(STAID),
+             SD = as.numeric(SD)) %>% 
+      rename_all(tolower) 
+    new_data <- inner_join(new_data, st, by = "staid")
+    
+    if (nrow(new_data)< 2){
+      print(paste("skipped file: ", i))
+      next
+    }
+    print(i) #print statement zum prüfen des Fortschrittes
+    
+}
+}
+
+for (i in c(newlist)){
+  pipeline_newlist(i, 22, "snow_final")
+}
+
+
+
+new_df <- dbGetQuery(conn, "select * from cdk where sd < 0")
+
+
+ggplot(new_df, aes(sd))+
+  geom_histogram()
+
+new_df %>% group_by(country) %>% count()
+
+
+
+new_df %>% filter(country == "netherlands")
+
+dbGetQuery(conn, "select * from cdk where cn = it")
+
+
+```
+
+
+#Alternative Pipeline bei der nur der Dateiname als Variable genutzt wird
+
+
+
+
+```{r deutschland}
+bullshit <- function(i){
+  set.seed(i)
+  germany <- germany_raw %>% group_by(lat_cut = cut(lat, breaks = 20),
+                                       long_cut = cut(lon, breaks = 20),
+                                       hght_cut = cut(hght, breaks = 1000)) %>% 
+  sample_frac(0.5) %>% 
+  ungroup()
+  if (max(germany$hght > 2000)){
+    return(i)
+    break
+  } else {
+    next
+    }
+ 
+}
+
+
+for (i in range(1:6000)){
+  bullshit(i)
+}
+```
+
+
+```{r bullshit}
+bullshit2 <- function(i){
+  set.seed(i)
+  include_station <- FALSE
+  while (!include_station) {
+    germany <- germany_raw %>% 
+      group_by(lat_cut = cut(lat, breaks = 20),
+               long_cut = cut(lon, breaks = 20),
+               hght_cut = cut(hght, breaks = 1000)) %>% 
+      sample_frac(0.5) %>% 
+      ungroup()
+    include_station <- max(germany$hght) > 2000
+  }
+  return(i)
+}
+
+seeds <- c()
+for (i in 1:6000) {
+  seed <- bullshit2(i)
+  seeds <- c(seeds, seed)
+}
+
+
+```
+
+
+```{r deutschland}
+set.seed(50)
+germany_max <- germany_raw %>% arrange(desc(hght)) %>% slice_max(hght, n = 10)
+
+germany_raw <-st %>% filter(cn == "de") 
+germany <- germany_raw %>% group_by(lat_cut = cut(lat, breaks = 20),
+                                       long_cut = cut(lon, breaks = 20),
+                                       hght_cut = cut(hght, breaks = 7)) %>% 
+  sample_frac(0.3) %>% 
+  ungroup() %>% 
+  select(-c(lat_cut, long_cut, hght_cut )) %>% 
+  rbind(germany_max)
+
+germany
+summary(germany_raw)
+summary(germany)
+```
+
+
+```{r deutschland}
+ggplot(germany_raw, aes(hght))+
+  geom_histogram()
+
+
+ggplot(germany, aes(hght))+
+  geom_histogram()
+
+summary(germany_raw)
+summary(germany)
+```
+
+
+
+
+

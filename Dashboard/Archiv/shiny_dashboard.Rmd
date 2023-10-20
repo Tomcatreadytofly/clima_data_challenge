@@ -1,0 +1,281 @@
+---
+title: "R Notebook"
+
+---
+```{r}
+.libPaths()
+```
+
+```{r}
+library(leaflet)
+library(shiny)
+library(tidyverse)
+library(shinydashboard)
+library(DataExplorer)
+library(geoR)
+library(celestial)
+library(rgdal)
+library(RPostgres)
+library(DBI)
+library(shapefiles)
+library(PBSmapping)
+library(adehabitatHR)
+library(maptools)
+library(maps)
+library(igraph)
+library(ggplot2)
+library(ggmap)
+library(sp)
+library(tmap)
+```
+```{r}
+getwd()
+```
+```{r}
+df_snow <- read.csv(paste0(getwd(),"/ECA_indexSD_reduced.csv"), header = TRUE)
+```
+
+Die Koordinaten sind nicht im richtigen Format. Sie liegen aktuell im Bogenmass vor und für das leaflet werden die Koordinaten in Dezimalmass benötigt. R bietet mit dms2deg eine Methode, die Koordinaten zu konvertieren.
+
+```{r}
+df_snow <- df_snow %>% 
+  filter(country != "russian federation")
+```
+```{r}
+print(dms2deg("-000:21:23"))
+```
+```{r}
+df_snow <- df_snow %>%
+  mutate(longitude_deg = dms2deg(longitude)) %>%
+  mutate(latitude_deg = dms2deg(latitude))
+```
+
+
+```{r}
+df_snow <- drop_na(df_snow)
+```
+
+```{r}
+df_snow <- df_snow %>% 
+  mutate(country = str_trim(country))
+```
+
+
+```{r}
+# df_snow <- df_snow %>% 
+#   mutate_at("country", as.factor)
+
+glimpse(df_snow)
+```
+
+
+```{r}
+# # select a data frame with the coordinates of the points
+# points <- df_snow %>% 
+#   select(station, longitude_deg, latitude_deg) %>% 
+#   distinct_all() %>% 
+#   arrange(longitude_deg, latitude_deg)
+# 
+# # select a data frame with coordinates of the country
+# points_country <- df_snow %>% 
+#   select(country, longitude_deg, latitude_deg) %>% 
+#   distinct_all() %>% 
+#   arrange(country)
+# 
+# # create a leaflet map object
+# m <- leaflet()
+# 
+# # add a base map to the object
+# m <- addTiles(m)
+# 
+# # add markers to the object
+# m <- addMarkers(m, 
+#                 data = points,
+#                 lng = ~longitude_deg,
+#                 lat = ~latitude_deg,
+#                 popup = ~station)
+```
+
+
+
+
+
+```{r}
+# # set initial zoom level and center point of the map object
+# m <- setView(m, lng = 0, lat = 0, zoom = 2)
+# 
+# # print the map object
+# m
+
+```
+
+```{r}
+# ggplot(df_snow, aes(station))+
+#   geom_bar()
+```
+
+```{r}
+save(df_snow, file = "df_snow.RData")
+```
+
+
+```{r}
+# create an empty header
+header <- dashboardHeader(
+  dropdownMenu(
+    type = "messages",
+    messageItem(
+      from = "Klimadaten-Team",
+      message = "Hier sind die Messstationen zu sehen"
+    )
+  )
+)
+
+# create an empty sidebar
+sidebar <- dashboardSidebar(
+  titlePanel("Schneefall"),
+  sliderInput(
+    inputId = "year",
+    label = "Jahr",
+    min = min(df_snow$year),
+    max = max(df_snow$year),
+    value = c(min(df_snow$year), max(df_snow$year)),
+    sep = ""
+    ),
+  selectInput(
+    inputId = "country",
+    label = "Land",
+    choices = df_snow$country,
+    selected = "",
+    # value = ""
+  )
+)
+
+# create an empty body
+body <- dashboardBody(
+  
+  leafletOutput("map"),
+  plotOutput("plot_country")
+)
+
+# create the UI using the header, sidebar and body
+ui <- dashboardPage(header = header, 
+                    sidebar = sidebar, 
+                    body = body
+                    )
+
+server <- function(input, output) {
+  
+  output$plot_country <- renderPlot({
+    
+  # df_snow_filtered <- subset(
+  #    df_snow, 
+  #    country == input$country,
+  #    # year == input$year
+  #    ) 
+    
+    df_snow_filtered <- df_snow %>% 
+      filter(country == input$country)
+  
+    ggplot(
+      data = df_snow_filtered,
+      aes(station)) +
+        geom_bar()
+    
+  #   qmplot(longitude_deg, latitude_deg, data = country, geom = "point", color = height) +
+  # facet_wrap(~ country)
+  })
+  
+  output$map <- renderLeaflet({
+
+ df_snow_filtered <- subset(
+     df_snow,
+     country == input$country,
+     # year == input$year
+     )
+ 
+    leaflet() %>%
+      addTiles() %>%
+      addCircleMarkers(
+                       lng = df_snow_filtered$longitude_deg,
+                       lat = df_snow_filtered$latitude_deg,
+                       radius = log(df_snow_filtered$winter_months),
+                       label = df_snow_filtered$station,
+                       weight = 2,
+                       opacity = 0.5
+                       )
+  })
+}
+
+shinyApp(ui, server)
+```
+
+```{r}
+df_snow %>%
+    filter(country == "switzerland")
+
+```
+
+
+```{r}
+# db <- "schneefall_database"
+# db_host <- "v000727.edu.ds.fhnw.ch"
+# db_port <- "50011"
+# db_user <- 'schneefall'
+# db_pass <- "Klima2023"
+
+```
+```{r}
+# conn <- dbConnect(
+#   RPostgres::Postgres(),
+#   dbname = db, 
+#   host = db_host,
+#   port = db_port,
+#   user = db_user,
+#   password = db_pass
+# )
+```
+
+```{r}
+# dbListTables(conn)
+# dbGetQuery(conn, 'select * from testdaten')
+```
+```{r}
+# beispiel <- data.frame(c("Wert1", "Wert2"), c(235,242))
+# 
+# dbWriteTable(conn, "neue_tabelle", beispiel, temporary = FALSE, append = TRUE)
+```
+
+
+```{r}
+# dbListTables(conn)
+```
+
+Ein Testfile mit wenigen Daten für die Erstellung der Polygone erstellen
+```{r}
+# zufällig 100 Datensätze ausgewählt
+set.seed(1234)
+test_polygon <- df_snow %>% 
+  sample_n(100)
+
+```
+
+Nur die Koordinaten des Test Files in ein Koordinaten-Set füllen
+```{r}
+
+
+```
+```{r}
+qmplot(longitude_deg, latitude_deg, data = test_polygon, geom = "polygon", group = country, fill = height, extent = "normal", maprange = FALSE)
+```
+
+```{r}
+data()
+tm_shape(countries_spdf)
+```
+
+
+
+
+
+

@@ -1,0 +1,120 @@
+# Create a dataframe with temperature data for the countries Finland, France, Italy and Spain with missing snow depth data
+# Link to data:  https://www.ecad.eu/dailydata/predefinedseries.php  -  "Daily mean temperature TG" - ECA_blend_tg.zip
+```{r}
+library(tidyverse)
+library(dplyr)
+library(readr)
+library(purrr)
+```
+
+# Create the dataframe 
+```{r}
+# Create a list of all text files starting with "TG_"
+files <- list.files(pattern = "^TG_.*\\.txt$")
+
+# Read the files for the missing countries and skip the first 21 lines
+temperature <- lapply(files, function(file) {
+  con <- file(file, "r")
+  header_lines <- readLines(con, n = 25)
+  country_match <- any(grepl("FINLAND|FRANCE|ITALY|SPAIN", header_lines))
+  close(con)
+  if (country_match) {
+    data <- read.table(file, header = FALSE, sep = ",", skip = 21, fill = TRUE)
+    return(data)
+  }
+})
+
+# Combine the files into a dataframe
+temperature <- do.call(rbind, temperature)
+```
+
+# Delete and rename columns
+```{r}
+# Delete the unnecessary SOUID: Source identifier and Q_TG quality check columns
+temperature <- temperature |> select(-V2, -V5)
+
+# Rename the columns
+temperature <- temperature |> rename(id = V1, date = V3, temperature = V4)
+```
+
+# Create a dataframe from the stations.txt file containing additional information for each station
+```{r}
+temp_stations <- read.delim(file = "stations.txt", header = FALSE, skip = 19, sep = ",")
+
+# Rename the columns
+temp_stations <- temp_stations |> rename(id = V1, station = V2, country = V3, latitude = V4, longitude = V5, height = V6)
+```
+
+# Merge the temp_stations and temperature dataframes
+```{r}
+temperature <- merge(temp_stations, temperature, by = "id", all = FALSE)
+
+# Place the date column after the id column and the station column after the country column
+temperature <- temperature |> 
+  relocate(date, .after = id) |> 
+  relocate(station, .after = country)
+```
+
+
+```{r}
+# Remove leading and trailing whitespace from the country and station columns 
+temperature <- temperature |>
+  mutate(country = trimws(country),
+         station = trimws(station))
+
+# Rename the ISO 3166 country codes to full country names
+temperature <- temperature |>
+  mutate(country = recode(country, 
+                           "AM" = "armenia",
+                           "AT" = "austria",
+                           "AZ" = "azerbaijan",
+                           "BY" = "belarus",
+                           "CH" = "switzerland",
+                           "DE" = "germany",
+                           "DK" = "denmark",
+                           "EE" = "estonia",
+                           "ES" = "spain",
+                           "FI" = "finland",
+                           "FR" = "france",
+                           "GB" = "united kingdom",
+                           "GE" = "georgia",
+                           "GL" = "greenland",
+                           "HR" = "croatia",
+                           "HU" = "hungary",
+                           "IE" = "ireland",
+                           "IS" = "iceland",
+                           "IT" = "italy",
+                           "KZ" = "kazakhstan",
+                           "KG" = "kyrgyzstan",
+                           "LV" = "latvia",
+                           "LT" = "lithuania",
+                           "LU" = "luxembourg",
+                           "MD" = "moldova",
+                           "ME" = "montenegro",
+                           "NL" = "netherlands",
+                           "NO" = "norway",
+                           "PL" = "poland",
+                           "RS" = "serbia",
+                           "RU" = "russia",
+                           "SE" = "sweden",
+                           "SI" = "slovenia",
+                           "SK" = "slovakia",
+                           "SJ" = "svalbard and jan mayen",
+                           "TM" = "turkmenistan",
+                           "TJ" = "tajikistan",
+                           "UA" = "ukraine",
+                           "UZ" = "uzbekistan"))
+
+
+# Convert all station names to lower case
+temperature$station <- tolower(temperature$station)
+
+# Convert the numeric format of the "date" column to the date format
+temperature$date <- as.Date(as.character(temperature$date), format = "%Y%m%d", origin = "1970-01-01")
+
+# Convert values of -9999 to NAs
+temperature[temperature == -9999] <- NA
+
+# Drop all NAs in the dataframe
+temperature <- na.omit(temperature)
+```

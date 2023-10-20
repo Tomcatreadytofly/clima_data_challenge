@@ -1,0 +1,229 @@
+---
+title: "R Notebook"
+output: 
+---
+
+
+##Libraries
+```{r librariesn warning = FALSE, message=FALSE}
+library(RPostgres)
+library(DBI)
+library(tidyverse)
+library(lubridate)
+library(shiny)
+library(glue)
+library(leaflet)
+library(celestial)
+library(tmaptools)
+library(DataExplorer)
+library(scales)
+library(zoo)
+```
+
+```{r set-up Verbindung}
+db <- "schneefall_database"
+db_host <- "v000727.edu.ds.fhnw.ch"
+db_port <- "50011"
+db_user <- "schneefall"
+db_pass <- "Klima2023"
+
+conn <- dbConnect(
+  Postgres(),
+  dbname = db,
+  host = db_host,
+  port = db_port,
+  user = db_user,
+  password = db_pass
+)
+
+localconn <- dbConnect(
+  Postgres(),
+  dbname = "snow",
+  host = "localhost",
+  port = "5432",
+  user = "postgres",
+  password = "SQL"
+)
+```
+
+
+```{r datensatz abfragen}
+stations <- dbGetQuery(conn, "select distinct(staid), lat,lon,country,hght,stahght,staname   from cdk ")
+
+location <- geocode_OSM("Oslo")$coords
+n_stations <- 1
+
+closest_stations <- stations %>% 
+    rowwise() %>%
+    mutate(distanz = approx_distances(location, (c(lon, lat)))) %>%
+    ungroup() %>% 
+    slice_min(distanz, n = n_stations)
+
+closest_stations_cn <- unique(closest_stations$country)
+staids <-paste0(unique(closest_stations)$staid)
+
+stations_string <- paste(unique(closest_stations$staid), collapse = ",")
+
+cssd <- dbGetQuery(conn, glue("select * from {closest_stations_cn} where staid in ({stations_string})"))
+
+```
+```{r Pipeline-Funktion}
+#Pipeline bereinigt Daten & prüft, ob der resultierende dataframe noch genügend Datensätze hat. Wenn ja wird in die DB gespeichert. 
+
+pipeline <- function(skip, i) {
+    filename <- paste0("SD_STAID", i, ".txt")
+    df <- read_csv(unzip(file, filename), col_types = 'iicii', skip = skip, na = c("NA", "-9999"))
+    file.remove(filename)
+    new_data <- df %>% 
+      rename_at(5, ~'Q') %>% 
+      filter(Q != 9) %>% 
+      mutate(DATE = as_date(DATE), 
+        year = year(DATE), 
+             month = (month(DATE)))%>% 
+      rename_all(tolower) %>% 
+      select(-c(q, souid)) %>% 
+      mutate(winter_season = ifelse(month  %in% c(9,10,11,12), year, year-1),
+             season = ifelse(month %in% c(10,11,12,1,2,3,4), "winter", "summer"))
+    
+    new_data <- inner_join(new_data, st, by = "staid")
+    return(new_data)
+
+}
+
+
+cssd <- pipeline(22, '004039')
+
+```
+
+```{r cssd_days erstellen}
+
+
+df_days <- data.frame(md = format(seq(as.Date("2021-10-01"), as.Date("2022-04-30"), by = "day"), "%m-%d"), 
+                      day_nr = 1:length(format(seq(as.Date("2021-10-01"), as.Date("2022-04-30"), by = "day"), "%m-%d")))
+
+
+cssd_days <- cssd %>%
+  mutate(season = ifelse(month %in% c(9,10, 11, 12, 1, 2, 3,4), "winter", "summer"),) %>% 
+  filter(winter_season > min(year), season == "winter") %>%
+  mutate(md = format(date, "%m-%d")) %>%
+  inner_join(df_days, by = "md") %>% 
+  mutate(period = ifelse(winter_season > max(winter_season)-10, "last 10 years", "reference period"))
+  
+
+
+cssd_days <- cssd %>%
+  #filter(winter_season > min(year), season == "winter") %>%
+  mutate(md = format(date, "%m-%d")) %>%
+  left_join(df_days, by = "md") 
+
+
+```
+
+
+
+```{r}
+cssd_days %>% 
+  mutate(snow40 = ifelse(sd > 40, 1, 0),
+         snow10 = ifelse(sd > 10, 1, 0),
+         snow100 = ifelse(sd > 100, 1, 0),
+         nosnow = ifelse(sd == 0, 1, 0)) %>% 
+  group_by(day_nr, period = ifelse(winter_season > max(winter_season)-10, "last 10 years", "reference period")) %>% 
+  summarize(p_snow40 = round(mean(snow40, na.rm = TRUE), 2),
+            p_snow10 = round(mean(snow10, na.rm = TRUE), 2),
+            p_snow100 = round(mean(snow100, na.rm = TRUE), 2),
+            p_nosnow = round(mean(nosnow, na.rm = TRUE), 2)) %>% 
+  ggplot()+
+  geom_line(aes(day_nr, p_snow40, color = period))+
+  geom_smooth(aes(day_nr, p_snow40,color = "gam"), method = "gam", se = FALSE)+
+  geom_smooth(aes(day_nr, p_snow40, color= "lm"), method = "lm",se = FALSE)+
+  geom_smooth(aes(day_nr, p_snow40, color= "loess"), method = "loess",se = FALSE)+
+  geom_smooth(aes(day_nr, p_snow40, color= "loess"), method = "loess",se = FALSE)+
+
+  scale_x_continuous(breaks = c(15,45,75,105,135,165,195,225),
+                     labels = c("15" = "Sept", "45" = "Okt", "75" = "Nov", "105" = "Dez", "135" = "Jan", "165" = "Feb", "195" = "Mar", "225" = "Apr"))+
+  labs(x = "Monat",
+       y = "Wahrscheinlichkeit")+
+  scale_y_continuous(labels = percent)
+```
+
+```{r Funktionierender code}
+
+df_prob <- cssd_days %>%
+  mutate(snow20 = ifelse(sd > 20, 1, 0),
+         nosnow = ifelse(sd == 0, 1, 0)) %>% 
+  group_by(period, day_nr) %>% 
+  summarize(p_snow20 = round(mean(snow20, na.rm = TRUE), 2),
+            p_nosnow = round(mean(nosnow, na.rm = TRUE), 2)) %>% 
+  mutate(rolling_avg = rollmean(p_snow20, k=7, fill=NA, align='right'))
+
+  ggplot(df_prob) +
+  geom_line(aes(day_nr, p_snow20,color = period)) +
+  geom_line(aes(day_nr, rolling_avg,color = ifelse(period == "last 10 years", "blue", "red")), size = 1.5)+
+  #geom_smooth(aes(day_nr, rolling_avg, color = period),method = "gam") + 
+  # scale_x_continuous(breaks = c(15,45,75,105,135,165,195,225),
+  #                    labels = c("15" = "Sept", "45" = "Okt", "75" = "Nov", "105" = "Dez", "135" = "Jan", "165" = "Feb", "195" = "Mar", "225" = "Apr"))+
+  scale_x_continuous(breaks = c(breaks = c(1,15,30,45,60,75,90,105,120,135,150,165,180,195,210,225,240)),
+                     labels = c("1"= "", "15" = "Sept", "30" = "", "45" = "Okt", "60" = "","75" = "Nov", "90" = "",
+                                "105" = "Dez", "120" = "","135" = "Jan", "150" = "","165" = "Feb","180" = "", 
+                                "195" = "Mar","210" = "",  "225" = "Apr", "240" = ""))+
+  labs(x = "Monat",
+       y = "Wahrscheinlichkeit")+
+  scale_y_continuous(labels = percent)
+  
+```
+
+```{r p für 7 tage schnee am stück}
+# calculate rolling sum of snowdepth over a 14-day window
+df <- cssd %>%
+  filter(season == "winter") %>% 
+  select(staid, date,sd, winter_season, season) %>% 
+  arrange(date) %>%
+  group_by(staid) %>%
+  mutate(rolling_snowdepth = rollapply(sd > 0, width = 7, FUN = sum, align = "left", fill = NA))
+
+prob_by_year <- df %>%
+  group_by(staid, winter_season) %>%
+  summarise(total_days = n(),
+            consecutive_days = sum(rolling_snowdepth == 7 & lead(rolling_snowdepth > 0, n = 7, default = FALSE)),
+            prob = consecutive_days / (total_days - 1)) %>%
+  mutate(rolling_prob = rollmean(prob, 7, na.pad = TRUE))
+
+
+
+# group data by year and calculate probability of having 2 consecutive weeks with snowdepth > 0
+prob_by_year <- df %>%
+  group_by(staid, winter_season) %>%
+  summarise(total_days = n(),
+            num_consecutive_days = sum(rolling_snowdepth > 0 & lead(rolling_snowdepth > 0, n = 7, default = FALSE)),
+            prob = num_consecutive_days / (total_days - 1)) %>%
+  mutate(rolling_prob = rollmean(prob, 7, na.pad = TRUE))
+  #select(total_weeks, num_consecutive_weeks)
+
+
+#veränderung
+avg1 <- percent(mean(subset(prob_by_year, winter_season < 1980 &winter_season > 1950)$prob))
+avg2 <- percent(mean(subset(prob_by_year, winter_season > max(winter_season)-11)$prob))
+
+
+ggplot(prob_by_year, aes(winter_season, rolling_prob))+
+  geom_line()
+
+cssd %>% group_by(winter_season) %>% 
+  count(month)
+
+
+```
+```{r}
+
+testcse <- cssd %>%  group_by(year, season) %>%  count() %>%  filter(n > 90, year > 1950) 
+subset(testcse, n > 90)
+
+cssd %>% 
+  filter(year %in% testcse$year)
+
+
+filter(cssd, year %in% testcse$year)
+
+
+```
+

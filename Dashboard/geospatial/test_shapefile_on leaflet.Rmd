@@ -1,0 +1,312 @@
+---
+title: "R Notebook"
+---
+
+```{r}
+library(leaflet)
+library(rsconnect)
+library(rgdal)
+library(sp)
+library(raster)
+library(tmap)
+library(dplyr)
+library(stringr)
+library(tidyverse)
+library(sf)
+
+getwd()
+load("df_snow.RData")
+```
+```{r}
+getwd()
+```
+Entzippen des Datensatzes
+```{r}
+system("unzip./geospatial/Shape_files/ne_10m_admin_0_countries.zip")
+unzip(zipfile = "./geospatial/Shape_files/ne_10m_admin_0_countries.zip", exdir = "./Shape_files/data")
+```
+Einlesen eines Shapefiles
+```{r}
+# sp <- readOGR(dsn = "./cdk-klima-challenge/geospatial/Shape_files/data/",
+#               layer = "ne_10m_admin_0_countries",
+#               verbose = FALSE)
+sp <- readOGR(dsn = "./Shape_files/data/",
+              layer = "ne_10m_admin_0_countries",
+              verbose = FALSE)  
+
+```
+
+
+```{r}
+str(sp, max.level = 2)
+```
+```{r}
+proj4string(sp)
+```
+```{r}
+sp@proj4string
+```
+```{r}
+slot(sp, "proj4string")
+```
+```{r}
+str(sp@polygons, max.level = 2)
+```
+```{r}
+str(sp@data, max.level = 2)
+```
+```{r}
+sp@data$CONTINENT
+```
+```{r}
+sp[["CONTINENT"]]
+```
+```{r}
+europe <- sp[sp[["CONTINENT"]] == "Europe", ]
+```
+```{r}
+str(europe, max.level = 2)
+```
+```{r}
+str(europe@data, max.level = 2)
+```
+```{r}
+qtm(europe, fill = "NAME", filltitle = "Country")
+```
+```{r}
+tm_shape(europe) +
+  tm_polygons(col = "NAME", title = "Country")
+
+#tmap_save(filename = "Europe.html", max.categories = 51)
+```
+nötige Attribute behalten
+```{r}
+europe@data <- europe@data[, c("NAME", "CONTINENT", "SUBREGION")]
+```
+neues Attribut zu Shapefile hinzufügen
+```{r}
+# europe$winter_month <- NA
+# europe$station <- NA
+# europe$latitude_deg <- NA
+# europe$longitude_deg <- NA
+# europe$height <- NA
+# europe$id <- NA
+# #proj4string(europe) <- CRS("+proj=longlat +datum=WGS84")
+# str(europe@data)
+```
+
+Attribute im Shapefile umbenennen
+```{r}
+europe@data <- europe@data %>%
+  rename(country = NAME, continent = CONTINENT, subregion = SUBREGION)
+```
+Variablen in der Spalte country am Wortanfang groß schreiben (aus dem Paket stringr)
+```{r}
+df_snow$country <- str_to_title(df_snow$country)
+```
+
+Namen der Länder im Shapefile und im Dataframe vergleichen
+```{r}
+# laden des gespeicherten Dataframes df_snow
+load("df_snow.RData")
+
+# Ländername im Dataframe groß schreiben
+df_snow$country <- str_to_title(df_snow$country)
+
+# Anpassen des Ländernames Tãœrkiye in Turkey
+df_snow <- df_snow %>%
+    filter(station != "trabzon")
+
+# Ländernamen des Dataframes mit Ländernamen des Shapefiles vergleichen und in neuer Spalte speichern mit dem Namen same_name_in_shapefile
+df_snow <- df_snow %>%
+    mutate(same_name_in_shapefile = country %in% europe@data$country)
+
+# Neues Dataframe name_diff mit den Ländern erstellen, die nicht im Shapefile vorkommen
+name_diff <- df_snow %>%
+    filter(same_name_in_shapefile == FALSE) %>%
+    select(country) %>%
+    unique()
+# Ausgabe des Dataframes name_diff
+name_diff
+```
+
+Erstellen von 2 neuen Dataframes mit den Ländern, die zu Europa gehören und den Ländern, die nicht zu Europa gehören
+```{r}
+# Länder, die nicht zu Europa gehören
+name_not_europe <- name_diff %>%
+    filter(country != "Bosnia And Herzegovina")
+```
+Nicht europäische Länder aus dem Dataframe entfernen
+```{r}
+# Herausfiltern der Länder, die nicht zu Europa gehören
+df_snow <- df_snow %>%
+  filter(country != (country %in% name_not_europe$country))
+
+
+# Liste der Länder aus dem Shapefile erstellen
+df_country_shp <- data.frame(europe@data$country)
+colnames(df_country_shp) <- "country"
+
+# Länder, die nicht im Dataframe vorkommen
+name_not_df_but_shape <- anti_join(df_country_shp, df_snow, by = "country")
+name_not_df_but_shape <- name_not_df_but_shape %>% arrange(country)
+```
+Das Land Bosnia And Herzegovina im df_snow in Bosnia and Herz. umbenennen
+```{r}
+df_snow <- df_snow %>%
+  mutate(country = ifelse(country == "Bosnia And Herzegovina", "Bosnia and Herz.", country))
+```
+```{r}
+
+df_snow %>%
+filter(country == "Bosnia and Herz.")
+```
+```{r}
+# entfernen der Kolonne same_name_in_shapefile
+df_snow <- df_snow %>%
+  select(-same_name_in_shapefile)
+```
+
+
+```{r}
+# Mittelwert der Schneehöhe pro Land berechnen
+df_snow <- left_join(df_snow, df_snow %>%
+                                group_by(country) %>%
+                                summarise(height_mean_year = mean(height, na.rm = FALSE)) %>%
+                                ungroup() %>%
+                                select(country, height_mean_year), by = "country")
+
+# Anzahl der Stationen pro Land berechnen
+df_snow <- left_join(df_snow, df_snow %>%
+                                  drop_na()  %>%
+                                  distinct() %>%
+                                  group_by(country) %>%
+                                  summarise(station_count = n()) %>%
+                                  ungroup() , by = "country")
+
+
+```
+```{r}
+# Die Koordinaten werden auf die Mitte des Landes gesetzt
+df_snow <- left_join(df_snow, df_snow  %>%
+                              group_by(country) %>%
+                              summarise(latitude_country = mean(latitude_deg, na.rm = TRUE)) %>%
+                              ungroup(), by = "country")
+
+df_snow <- left_join(df_snow, df_snow %>%
+                              group_by(country) %>%
+                              summarise(longitude_country = mean(longitude_deg, na.rm = TRUE)) %>%
+                              ungroup(), by = "country")
+
+
+```
+
+Shapefile mit Dataframe verbinden
+
+```{r}
+europe@data <- merge(europe@data, df_snow, by = "country")
+```
+
+
+
+
+```{r}
+
+str(europe@data$winter_month, max.level = 2)
+```
+Den Datensatz bereinigen
+```{r}
+
+europe@data$height <- ifelse(europe@data$height < 0,0, europe@data$height)
+europe@data$height <- ifelse(europe@data$height > 9000,0, europe@data$height)
+europe@data$height_mean_year <- round(europe@data$height_mean_year, digits = 0)
+europe@data$year_2018 <- ifelse(europe@data$year == 2018, europe@data$year, NA)
+
+```
+
+leaflet mit shapefile erstellen
+```{r}
+# europe_2018 <- europe[europe[[year]] == "2018", ]
+# europe_2018 <- europe[europe$year == 2018, ]
+europe_2018 <- europe
+europe_2018@data <- europe_2018@data %>%
+  filter(year == 2018)
+
+# pal <- colorNumeric(
+#   palette = "Blues",
+#   domain = europe_2018,
+#   na.color = "transparent"
+# )
+```
+
+
+```{r}
+leaflet(europe_2018) %>%
+  addTiles() %>%
+ addPolygons(color = "white", weight = 0.5, smoothFactor = 0.5,
+             opacity = 0.1, fillOpacity = 0.3,
+             fillColor = ~colorQuantile("BuPu", height_mean_year)(height_mean_year),
+             popup = ~paste0("<strong>", country, "</strong>",
+                             "<br>",
+                             "Height: ", height_mean_year, " m"))
+
+```
+
+
+```{r}
+stop("leaflet noch nicht fertig")
+# create a color palette for the snow height
+pal <- colorNumeric(
+  palette = "YlOrRd",
+  domain = europe@data$year_2018,
+  na.color = "transparent"
+)
+```
+```{r}
+
+# create a colored map for the snow height
+leaflet(europe) %>%
+  addTiles() %>%
+    # setView(lng = 10, lat = 0, zoom = 4) %>%
+    #   addPolygons(
+    #     fillColor = ~pal(height_mean_year),
+    #     fillOpacity = 0.8,
+    #     color = "#BDBDC3",
+    #     weight = 1,
+    #     popup = ~htmlEscape(paste0(
+    #       "<strong>", country, "</strong>",
+    #       "<br>",
+    #       "Height: ", height, " m"
+    #     ))
+    #   ) %>%
+    #     addLegend(
+    #       pal = pal,
+    #       values = ~height,
+    #       opacity = 0.8,
+    #       title = "Height (m)",
+    #       position = "bottomright"
+    #     ) %>%
+        addPolygons(
+          fillColor = ~pal(height_mean_year),
+          # ~pal(height_mean_year),
+                    # lng = ~longitude_country,
+                    # lat = ~latitude_country,
+                    stroke = FALSE,
+                    # smoothFactor = 0.2,
+                    # fillOpacity = 0.8,
+                    # popup = ~htmlEscape(paste0(
+                    #   "<strong>", country, "</strong>",
+                    #   "<br>",
+                    #   "Height: ", height, " m"
+                    # ))
+        )
+
+
+```
+
+```{r}
+```
+```{r}
+```
+```{r}
+```

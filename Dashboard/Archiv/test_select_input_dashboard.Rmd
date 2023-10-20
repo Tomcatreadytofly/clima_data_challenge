@@ -1,0 +1,57 @@
+---
+title: "R Notebook"
+
+---
+
+```{r}
+library(tidyverse)
+library(shiny)
+library(shinydashboard)
+library(leaflet)
+library(rsconnect)
+
+
+getwd()
+load("df_snow.RData")
+
+df_snow <- as.tibble(df_snow)
+df_snow <- as.data.frame(df_snow)
+
+df_test <- df_snow %>% 
+  select(country, height, latitude_deg, longitude_deg, year)
+
+df_country <- df_test %>% 
+  filter(country == "switzerland" | country == "germany") %>% 
+  filter(year > 2021)
+```
+
+Mini-Dashboard erstellen mit dem kleinen Datensatz
+```{r}
+header <- dashboardHeader()
+
+sidebar <- dashboardSidebar(
+  selectInput(
+    inputId = "select",
+    label = "Select",
+    choices = df_country$country, 
+    selected = "switzerland",
+    multiple = TRUE,
+
+  )
+)
+
+body <- dashboardBody(
+  textOutput("text")
+)
+
+ui <- dashboardPage(
+  header = header,
+  sidebar = sidebar,
+  body = body
+)
+server <- function(input, output) {
+  output$text <- renderText(input$select)
+}
+
+shinyApp(ui = ui, server = server)
+```
